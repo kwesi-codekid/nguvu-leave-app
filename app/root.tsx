@@ -5,10 +5,15 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLoaderData,
 } from "react-router";
+import { useEffect } from "react";
+import { addToast } from "@heroui/react";
 
 import type { Route } from "./+types/root";
 import "./app.css";
+import { Providers } from "./ui/lib/providers";
+import { getFlashSession } from "./flash-session";
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -23,19 +28,44 @@ export const links: Route.LinksFunction = () => [
   },
 ];
 
+export async function loader({ request }: Route.LoaderArgs) {
+  const session = await getFlashSession(request.headers.get("Cookie"));
+  const flash = session.get("alert");
+  return { flash };
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
+  const data = useLoaderData<typeof loader>();
+  const flash = data?.flash;
+
+  useEffect(() => {
+    if (flash) {
+      addToast({
+        color: flash.status === "error" ? "danger" : "success",
+        description: flash.message,
+        title:
+          flash.title || (flash.status === "error" ? "Error Occurred!" : "Successful"),
+      });
+    }
+  }, [flash]);
+
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+        />
         <Meta />
         <Links />
       </head>
       <body>
-        {children}
-        <ScrollRestoration />
-        <Scripts />
+        <Providers>
+          {children}
+          <ScrollRestoration />
+          <Scripts />
+        </Providers>
       </body>
     </html>
   );

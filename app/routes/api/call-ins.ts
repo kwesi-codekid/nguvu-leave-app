@@ -1,0 +1,389 @@
+import {
+    type LoaderFunctionArgs,
+    type ActionFunctionArgs,
+} from "react-router"
+import { connectDB } from "~/database/connect"
+import { CallInController } from "~/controllers/call-in.controller"
+import Staff from "~/models/staff.model"
+import jwt from "jsonwebtoken"
+import {
+    successResponse,
+    errorResponse,
+    validationErrorResponse,
+    extractToken,
+} from "~/utils/api-utils"
+
+const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
+
+// Helper to get authenticated staff from request
+async function getAuthenticatedStaff(request: Request) {
+    const authHeader = request.headers.get("Authorization")
+    const token = extractToken(authHeader)
+
+    if (!token) {
+        return null
+    }
+
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET) as { staffId: string }
+        await connectDB()
+
+        const staff = await Staff.findById(decoded.staffId)
+            .select("-passwordHash -otpCodeHash -otpExpiresAt")
+            .lean()
+
+        if (!staff || staff.status !== "active") {
+            return null
+        }
+
+        return staff
+    } catch (error) {
+        return null
+    }
+}
+
+// GET /api/call-ins
+export async function loader({ request }: LoaderFunctionArgs) {
+    try {
+        // Check authentication
+        const user = await getAuthenticatedStaff(request)
+        if (!user) {
+            return errorResponse("Unauthorized", null, 401)
+        }
+
+        await connectDB()
+
+        const url = new URL(request.url)
+        const op = url.searchParams.get("op")
+
+        // Prepare request object with actual properties
+        const req = {
+            query: Object.fromEntries(url.searchParams),
+            user,
+            headers: Object.fromEntries(request.headers.entries()),
+            ip:
+                request.headers.get("X-Forwarded-For") ||
+                request.headers.get("CF-Connecting-IP") ||
+                "127.0.0.1",
+            socket: {
+                remoteAddress:
+                    request.headers.get("X-Forwarded-For") || "127.0.0.1",
+            },
+            userAgent: request.headers.get("user-agent"),
+        } as any
+
+        switch (op) {
+            case "my-call-ins": {
+                // Get my call-ins with pagination and filters
+                const result = await CallInController.getMyCallIns(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "staff": {
+                // Get staff call-ins - requires staffId parameter
+                const staffId = url.searchParams.get("staffId")
+                if (!staffId) {
+                    return validationErrorResponse("Validation failed", [
+                        { field: "staffId", message: "Staff ID is required" },
+                    ])
+                }
+
+                // Check authorization
+                const canView =
+                    staffId === user._id ||
+                    user?.permissions?.includes("HR") ||
+                    user?.permissions?.includes("ADMIN") ||
+                    user?.permissions?.includes("MANAGER")
+
+                if (!canView) {
+                    return errorResponse(
+                        "Unauthorized to view staff call-ins",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.getStaffCallIns(
+                    req,
+                    staffId
+                )
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "department": {
+                // Get department call-ins - requires departmentId parameter
+                const departmentId = url.searchParams.get("departmentId")
+                if (!departmentId) {
+                    return validationErrorResponse("Validation failed", [
+                        {
+                            field: "departmentId",
+                            message: "Department ID is required",
+                        },
+                    ])
+                }
+
+                // Check permissions - HR, Admin, Manager, or Department Head
+                if (
+                    !user?.permissions?.includes("HR") &&
+                    !user?.permissions?.includes("ADMIN") &&
+                    !user?.permissions?.includes("MANAGER")
+                ) {
+                    return errorResponse(
+                        "Unauthorized to view department call-ins",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.getDepartmentCallIns(
+                    req,
+                    departmentId
+                )
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "history": {
+                // Get staff call-in history - requires staffId parameter
+                const staffId = url.searchParams.get("staffId")
+                if (!staffId) {
+                    return validationErrorResponse("Validation failed", [
+                        { field: "staffId", message: "Staff ID is required" },
+                    ])
+                }
+
+                // Check authorization
+                const canView =
+                    staffId === user._id ||
+                    user?.permissions?.includes("HR") ||
+                    user?.permissions?.includes("ADMIN") ||
+                    user?.permissions?.includes("MANAGER")
+
+                if (!canView) {
+                    return errorResponse(
+                        "Unauthorized to view staff call-in history",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.getStaffCallInHistory(
+                    req,
+                    staffId
+                )
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "report": {
+                // Generate call-in report (requires HR/Admin/Manager permissions)
+                if (
+                    !user?.permissions?.includes("HR") &&
+                    !user?.permissions?.includes("ADMIN") &&
+                    !user?.permissions?.includes("MANAGER")
+                ) {
+                    return errorResponse(
+                        "Unauthorized to generate call-in report",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.getCallInReport(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "summary": {
+                // Get call-in summary (requires HR/Admin/Manager permissions)
+                if (
+                    !user?.permissions?.includes("HR") &&
+                    !user?.permissions?.includes("ADMIN") &&
+                    !user?.permissions?.includes("MANAGER")
+                ) {
+                    return errorResponse(
+                        "Unauthorized to view call-in summary",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.getCallInSummary(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "analytics": {
+                // Get call-in analytics (requires HR/Admin permissions)
+                if (
+                    !user?.permissions?.includes("HR") &&
+                    !user?.permissions?.includes("ADMIN")
+                ) {
+                    return errorResponse(
+                        "Unauthorized to view call-in analytics",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.getCallInAnalytics(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            default:
+                return errorResponse(
+                    "Invalid operation. Valid operations: my-call-ins, staff, department, history, report, summary, analytics",
+                    null,
+                    400
+                )
+        }
+    } catch (error) {
+        console.error("Call-ins loader error:", error)
+        const message =
+            error instanceof Error ? error.message : "An error occurred"
+        return errorResponse(message, null, 500)
+    }
+}
+
+// POST /api/call-ins
+export async function action({ request }: ActionFunctionArgs) {
+    if (request.method !== "POST") {
+        return errorResponse("Method not allowed", null, 405)
+    }
+
+    try {
+        // Check authentication
+        const user = await getAuthenticatedStaff(request)
+        if (!user) {
+            return errorResponse("Unauthorized", null, 401)
+        }
+
+        await connectDB()
+
+        const url = new URL(request.url)
+        const op = url.searchParams.get("op")
+
+        // Parse body
+        let body = {}
+        const contentType = request.headers.get("Content-Type")
+
+        if (contentType?.includes("application/json")) {
+            try {
+                body = await request.json()
+            } catch {
+                return validationErrorResponse("Invalid JSON body", [])
+            }
+        }
+
+        // Prepare request object with actual properties
+        const req = {
+            body,
+            query: Object.fromEntries(url.searchParams),
+            user,
+            headers: Object.fromEntries(request.headers.entries()),
+            ip:
+                request.headers.get("X-Forwarded-For") ||
+                request.headers.get("CF-Connecting-IP") ||
+                "127.0.0.1",
+            socket: {
+                remoteAddress:
+                    request.headers.get("X-Forwarded-For") || "127.0.0.1",
+            },
+            userAgent: request.headers.get("user-agent"),
+        } as any
+
+        switch (op) {
+            case "bulk": {
+                // Create bulk call-ins (HR/Admin only)
+                if (
+                    !user?.permissions?.includes("HR") &&
+                    !user?.permissions?.includes("ADMIN")
+                ) {
+                    return errorResponse(
+                        "Unauthorized. Only HR/Admin can create bulk call-ins",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.createBulkCallIns(req)
+
+                if (result.status !== "success") {
+                    if (result.errors) {
+                        return validationErrorResponse(
+                            result.message,
+                            result.errors
+                        )
+                    }
+                    return errorResponse(result.message, null, 500)
+                }
+
+                return successResponse(result.message, result.data)
+            }
+
+            case "process-pending": {
+                // Process pending call-ins (Admin only)
+                if (!user?.permissions?.includes("ADMIN")) {
+                    return errorResponse(
+                        "Unauthorized. Only system administrators can process pending call-ins",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.processPendingCallIns(req)
+
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            default: {
+                // Default POST - create single call-in with automatic notification
+                // Check if user can create call-ins (Manager for dept, HR/Admin for any)
+                const isDepartmentHead = false // Will be checked in controller
+                const hasPermission =
+                    user?.permissions?.includes("HR") ||
+                    user?.permissions?.includes("ADMIN") ||
+                    user?.permissions?.includes("MANAGER")
+
+                if (!hasPermission) {
+                    return errorResponse(
+                        "Unauthorized. Only department heads, HR, or Admin can create call-ins",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await CallInController.createCallIn(req)
+
+                if (result.status !== "success") {
+                    if (result.errors) {
+                        return validationErrorResponse(
+                            result.message,
+                            result.errors
+                        )
+                    }
+                    return errorResponse(result.message, null, 500)
+                }
+
+                return successResponse(result.message, result.data, 201)
+            }
+        }
+    } catch (error) {
+        console.error("Call-ins action error:", error)
+        const message =
+            error instanceof Error ? error.message : "An error occurred"
+        return errorResponse(message, null, 500)
+    }
+}
