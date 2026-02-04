@@ -173,7 +173,7 @@ export default function AppLayout({
     }
 
     return (
-        <div className='flex h-screen overflow-hidden light transition-colors duration-400'>
+        <div className='flex h-screen overflow-hidden transition-colors duration-400'>
             {/* Desktop Sidebar - visible on lg screens and larger */}
             <AnimatePresence initial={false}>
                 <motion.div

@@ -22,6 +22,7 @@ import {
     TableRow,
     Tooltip,
     useDisclosure,
+    addToast,
 } from "@heroui/react"
 import { useState } from "react"
 import axios from "axios"
@@ -130,9 +131,19 @@ export default function Departments() {
             setFormData({ name: "", description: "" })
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Department created successfully",
+            })
         } catch (error: any) {
             console.error("Error creating department:", error)
-            alert(error.response?.data?.message || "Failed to create department")
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to create department",
+            })
         } finally {
             setIsSubmitting(false)
         }
@@ -204,9 +215,19 @@ export default function Departments() {
 
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Department updated successfully",
+            })
         } catch (error: any) {
             console.error("Error updating department:", error)
-            alert(error.response?.data?.message || "Failed to update department")
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to update department",
+            })
         } finally {
             setIsSubmitting(false)
         }
@@ -234,9 +255,19 @@ export default function Departments() {
             )
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Department deleted successfully",
+            })
         } catch (error: any) {
             console.error("Error deleting department:", error)
-            alert(error.response?.data?.message || "Failed to delete department")
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to delete department",
+            })
         } finally {
             setIsDeleting(false)
         }

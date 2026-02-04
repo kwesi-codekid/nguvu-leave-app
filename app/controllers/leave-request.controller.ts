@@ -2885,6 +2885,198 @@ export class LeaveRequestController {
         }
         return colors[leaveType] || "#607D8B"
     }
+
+    /**
+     * Get calendar events for all approved leave requests
+     * GET /api/leave-calendar?op=calendar-events
+     */
+    static async getCalendarEvents(req: Request): Promise<ResponseObject> {
+        try {
+            const { startDate, endDate, department } = req.query
+            const user = (req as any).user
+
+            // Check permissions
+            if (
+                !user?.permissions?.includes("HR") &&
+                !user?.permissions?.includes("ADMIN") &&
+                !user?.permissions?.includes("MANAGER")
+            ) {
+                return errorResponseObject(
+                    "Unauthorized. Only HR/Admin/Manager can view calendar events"
+                )
+            }
+
+            if (!startDate || !endDate) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "startDate", message: "Start date is required" },
+                    { field: "endDate", message: "End date is required" },
+                ])
+            }
+
+            const start = new Date(startDate as string)
+            const end = new Date(endDate as string)
+
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "startDate", message: "Invalid start date format" },
+                    { field: "endDate", message: "Invalid end date format" },
+                ])
+            }
+
+            // Build query for approved leave requests
+            const query: any = {
+                status: LeaveStatus.APPROVED,
+                $or: [
+                    { startDate: { $lte: end, $gte: start } },
+                    { endDate: { $gte: start, $lte: end } },
+                    { startDate: { $lte: start }, endDate: { $gte: end } },
+                ],
+            }
+
+            // Filter by department if specified (and user is not HR/Admin)
+            if (department && !user?.permissions?.includes("HR") && !user?.permissions?.includes("ADMIN")) {
+                // Get staff in the specified department
+                const staffInDept = await Staff.find({ department }).select("_id")
+                const staffIds = staffInDept.map(s => s._id)
+                query.staff = { $in: staffIds }
+            }
+
+            // Get leave requests
+            const leaveRequests = await LeaveRequest.find(query)
+                .populate("staff", "name staffId department")
+                .populate("approval.byStaff", "name")
+                .sort({ startDate: 1 })
+
+            // Transform to calendar events
+            const events = []
+            for (const request of leaveRequests) {
+                const requestStart = new Date(request.startDate)
+                const requestEnd = new Date(request.endDate)
+                
+                // Create events for each day in the leave period
+                const currentDate = new Date(requestStart)
+                while (currentDate <= requestEnd) {
+                    // Skip weekends if not sick leave
+                    const dayOfWeek = currentDate.getDay()
+                    if (dayOfWeek !== 0 && dayOfWeek !== 6 || request.leaveType === LeaveTypes.SICK) {
+                        events.push({
+                            id: request._id,
+                            title: `${request.leaveType} - ${(request.staff as any).name}`,
+                            start: new Date(currentDate),
+                            end: new Date(currentDate),
+                            allDay: true,
+                            backgroundColor: this.getLeaveTypeColor(request.leaveType),
+                            extendedProps: {
+                                staffId: (request.staff as any).staffId,
+                                staffName: (request.staff as any).name,
+                                department: (request.staff as any).department,
+                                leaveType: request.leaveType,
+                                status: request.status,
+                                approver: (request.approval?.byStaff as any)?.name,
+                                reason: request.reason,
+                                requestId: request._id,
+                            },
+                        })
+                    }
+                    currentDate.setDate(currentDate.getDate() + 1)
+                }
+            }
+
+            return successResponseObject("Calendar events retrieved successfully", {
+                events,
+                totalEvents: events.length,
+                dateRange: { startDate: start, endDate: end },
+            })
+        } catch (error) {
+            console.error("Error fetching calendar events:", error)
+            return errorResponseObject("Failed to fetch calendar events")
+        }
+    }
+
+    /**
+     * Get calendar events for current user's leave requests
+     * GET /api/leave-calendar?op=my-calendar
+     */
+    static async getMyCalendarEvents(req: Request): Promise<ResponseObject> {
+        try {
+            const { startDate, endDate } = req.query
+            const user = (req as any).user
+
+            if (!startDate || !endDate) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "startDate", message: "Start date is required" },
+                    { field: "endDate", message: "End date is required" },
+                ])
+            }
+
+            const start = new Date(startDate as string)
+            const end = new Date(endDate as string)
+
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "startDate", message: "Invalid start date format" },
+                    { field: "endDate", message: "Invalid end date format" },
+                ])
+            }
+
+            // Get user's leave requests
+            const query: any = {
+                staff: user._id,
+                $or: [
+                    { startDate: { $lte: end, $gte: start } },
+                    { endDate: { $gte: start, $lte: end } },
+                    { startDate: { $lte: start }, endDate: { $gte: end } },
+                ],
+            }
+
+            const leaveRequests = await LeaveRequest.find(query)
+                .populate("approval.byStaff", "name")
+                .sort({ startDate: 1 })
+
+            // Transform to calendar events
+            const events = []
+            for (const request of leaveRequests) {
+                const requestStart = new Date(request.startDate)
+                const requestEnd = new Date(request.endDate)
+                
+                // Create events for each day in the leave period
+                const currentDate = new Date(requestStart)
+                while (currentDate <= requestEnd) {
+                    // Skip weekends if not sick leave
+                    const dayOfWeek = currentDate.getDay()
+                    if (dayOfWeek !== 0 && dayOfWeek !== 6 || request.leaveType === LeaveTypes.SICK) {
+                        events.push({
+                            id: request._id,
+                            title: `${request.leaveType} Leave`,
+                            start: new Date(currentDate),
+                            end: new Date(currentDate),
+                            allDay: true,
+                            backgroundColor: this.getLeaveTypeColor(request.leaveType),
+                            borderColor: request.status === LeaveStatus.APPROVED ? 
+                                this.getLeaveTypeColor(request.leaveType) : "#9CA3AF",
+                            extendedProps: {
+                                leaveType: request.leaveType,
+                                status: request.status,
+                                approver: (request.approval?.byStaff as any)?.name,
+                                reason: request.reason,
+                                requestId: request._id,
+                            },
+                        })
+                    }
+                    currentDate.setDate(currentDate.getDate() + 1)
+                }
+            }
+
+            return successResponseObject("My calendar events retrieved successfully", {
+                events,
+                totalEvents: events.length,
+                dateRange: { startDate: start, endDate: end },
+            })
+        } catch (error) {
+            console.error("Error fetching my calendar events:", error)
+            return errorResponseObject("Failed to fetch calendar events")
+        }
+    }
 }
 
 export default LeaveRequestController

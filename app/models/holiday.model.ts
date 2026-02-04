@@ -4,7 +4,7 @@ import { HolidayInterface, HolidayTypes } from "../utils/types"
 // Extend the interface for Mongoose document
 export interface IHoliday extends HolidayInterface, Document {
     _id: string
-    getDateForYear(year: number): Date | null
+    getDatesForYear(year: number): { start: Date; end: Date } | null
 }
 
 // Interface for static methods
@@ -29,60 +29,13 @@ const HolidaySchema = new Schema<IHoliday>(
             required: true,
             index: true,
         },
-        // For varying holidays - specific date
-        date: {
+        startDate: {
             type: Date,
-            required: function () {
-                return this.type === HolidayTypes.VARYING
-            },
-            validate: {
-                validator: function (value: Date) {
-                    // Only validate if type is VARYING
-                    if (this.type === HolidayTypes.VARYING) {
-                        return value instanceof Date && !isNaN(value.getTime())
-                    }
-                    return true
-                },
-                message: "Valid date is required for varying holidays",
-            },
+            required: true,
         },
-        // For fixed holidays - month
-        fixedMonth: {
-            type: Number,
-            min: 1,
-            max: 12,
-            required: function () {
-                return this.type === HolidayTypes.FIXED
-            },
-            validate: {
-                validator: function (value: number) {
-                    // Only validate if type is FIXED
-                    if (this.type === HolidayTypes.FIXED) {
-                        return value >= 1 && value <= 12
-                    }
-                    return true
-                },
-                message: "Month must be between 1 and 12",
-            },
-        },
-        // For fixed holidays - day
-        fixedDay: {
-            type: Number,
-            min: 1,
-            max: 31,
-            required: function () {
-                return this.type === HolidayTypes.FIXED
-            },
-            validate: {
-                validator: function (value: number) {
-                    // Only validate if type is FIXED
-                    if (this.type === HolidayTypes.FIXED) {
-                        return value >= 1 && value <= 31
-                    }
-                    return true
-                },
-                message: "Day must be between 1 and 31",
-            },
+        endDate: {
+            type: Date,
+            required: true,
         },
         description: {
             type: String,
@@ -101,47 +54,49 @@ const HolidaySchema = new Schema<IHoliday>(
 )
 
 // Create indexes
-HolidaySchema.index({ date: 1 })
-HolidaySchema.index({ fixedMonth: 1, fixedDay: 1 })
+HolidaySchema.index({ startDate: 1 })
+HolidaySchema.index({ endDate: 1 })
 HolidaySchema.index({ name: 1 })
 
-// Pre-save validation to ensure correct fields based on type
-HolidaySchema.pre("save", function (next) {
-    if (this.type === HolidayTypes.VARYING) {
-        // Clear fixed holiday fields
-        this.fixedMonth = undefined
-        this.fixedDay = undefined
-
-        // Ensure date is provided
-        if (!this.date) {
-            return next(new Error("Date is required for varying holidays"))
-        }
-    } else if (this.type === HolidayTypes.FIXED) {
-        // Clear varying holiday fields
-        this.date = undefined
-
-        // Ensure fixed fields are provided
-        if (!this.fixedMonth || !this.fixedDay) {
-            return next(new Error("Fixed month and day are required for fixed holidays"))
-        }
+// Pre-save to ensure endDate >= startDate
+HolidaySchema.pre("save", function () {
+    if (!this.endDate) {
+        this.endDate = this.startDate
     }
 
-    next()
+    if (this.endDate < this.startDate) {
+        throw new Error("End date cannot be before start date")
+    }
 })
 
-// Instance method to get the date for a specific year
-HolidaySchema.methods.getDateForYear = function (year: number): Date | null {
+// Instance method to get dates for a specific year (for fixed holidays)
+HolidaySchema.methods.getDatesForYear = function (year: number): { start: Date; end: Date } | null {
     if (this.type === HolidayTypes.FIXED) {
-        // Create date for the specified year
-        try {
-            return new Date(year, this.fixedMonth - 1, this.fixedDay)
-        } catch (error) {
-            return null
+        // For fixed holidays, use the month/day from stored dates but apply to requested year
+        const startMonth = this.startDate.getMonth()
+        const startDay = this.startDate.getDate()
+        const endMonth = this.endDate.getMonth()
+        const endDay = this.endDate.getDate()
+
+        let startYear = year
+        let endYear = year
+
+        // Handle year boundary (e.g., Dec 31 - Jan 2)
+        if (endMonth < startMonth || (endMonth === startMonth && endDay < startDay)) {
+            endYear = year + 1
+        }
+
+        return {
+            start: new Date(startYear, startMonth, startDay),
+            end: new Date(endYear, endMonth, endDay),
         }
     } else if (this.type === HolidayTypes.VARYING) {
-        // For varying holidays, return the date if it's in the specified year
-        if (this.date && this.date.getFullYear() === year) {
-            return this.date
+        // For varying holidays, return the stored dates if they're in the specified year
+        if (this.startDate.getFullYear() === year) {
+            return {
+                start: this.startDate,
+                end: this.endDate,
+            }
         }
     }
     return null
@@ -151,7 +106,7 @@ HolidaySchema.methods.getDateForYear = function (year: number): Date | null {
 HolidaySchema.statics.getHolidaysForYear = async function (year: number): Promise<IHoliday[]> {
     const holidays: IHoliday[] = []
 
-    // Get all fixed holidays
+    // Get all fixed holidays (they apply to every year)
     const fixedHolidays = await this.find({ type: HolidayTypes.FIXED }).lean()
     holidays.push(...fixedHolidays)
 
@@ -161,7 +116,7 @@ HolidaySchema.statics.getHolidaysForYear = async function (year: number): Promis
 
     const varyingHolidays = await this.find({
         type: HolidayTypes.VARYING,
-        date: {
+        startDate: {
             $gte: yearStart,
             $lte: yearEnd,
         },
@@ -174,18 +129,19 @@ HolidaySchema.statics.getHolidaysForYear = async function (year: number): Promis
 
 // Static method to get holidays within a date range
 HolidaySchema.statics.getHolidaysInRange = async function (
-    startDate: Date,
-    endDate: Date
+    rangeStart: Date,
+    rangeEnd: Date
 ): Promise<IHoliday[]> {
     const holidays: IHoliday[] = []
 
-    // Get varying holidays in the range
+    // Get varying holidays that overlap with the range
     const varyingHolidays = await this.find({
         type: HolidayTypes.VARYING,
-        date: {
-            $gte: startDate,
-            $lte: endDate,
-        },
+        $or: [
+            { startDate: { $gte: rangeStart, $lte: rangeEnd } },
+            { endDate: { $gte: rangeStart, $lte: rangeEnd } },
+            { startDate: { $lte: rangeStart }, endDate: { $gte: rangeEnd } },
+        ],
     }).lean()
 
     holidays.push(...varyingHolidays)
@@ -194,14 +150,16 @@ HolidaySchema.statics.getHolidaysInRange = async function (
     const fixedHolidays = await this.find({ type: HolidayTypes.FIXED }).lean()
 
     // Check each year in the range
-    const startYear = startDate.getFullYear()
-    const endYear = endDate.getFullYear()
+    const startYear = rangeStart.getFullYear()
+    const endYear = rangeEnd.getFullYear()
 
     for (let year = startYear; year <= endYear; year++) {
         for (const holiday of fixedHolidays) {
-            const holidayDate = new Date(year, holiday.fixedMonth - 1, holiday.fixedDay)
+            const startMonth = new Date(holiday.startDate).getMonth()
+            const startDay = new Date(holiday.startDate).getDate()
+            const holidayStart = new Date(year, startMonth, startDay)
 
-            if (holidayDate >= startDate && holidayDate <= endDate) {
+            if (holidayStart >= rangeStart && holidayStart <= rangeEnd) {
                 holidays.push(holiday)
             }
         }
@@ -212,35 +170,49 @@ HolidaySchema.statics.getHolidaysInRange = async function (
 
 // Static method to check if a specific date is a holiday
 HolidaySchema.statics.isHoliday = async function (date: Date): Promise<boolean> {
-    // Normalize the date to remove time component
     const checkDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
 
     // Check varying holidays
-    const startOfDay = new Date(checkDate)
-    startOfDay.setHours(0, 0, 0, 0)
-    const endOfDay = new Date(checkDate)
-    endOfDay.setHours(23, 59, 59, 999)
-
     const varyingHoliday = await this.findOne({
         type: HolidayTypes.VARYING,
-        date: {
-            $gte: startOfDay,
-            $lte: endOfDay,
-        },
+        startDate: { $lte: checkDate },
+        endDate: { $gte: checkDate },
     })
 
     if (varyingHoliday) {
         return true
     }
 
-    // Check fixed holidays
-    const fixedHoliday = await this.findOne({
-        type: HolidayTypes.FIXED,
-        fixedMonth: checkDate.getMonth() + 1,
-        fixedDay: checkDate.getDate(),
-    })
+    // Check fixed holidays (compare month and day only)
+    const fixedHolidays = await this.find({ type: HolidayTypes.FIXED })
 
-    return !!fixedHoliday
+    for (const holiday of fixedHolidays) {
+        const startMonth = new Date(holiday.startDate).getMonth()
+        const startDay = new Date(holiday.startDate).getDate()
+        const endMonth = new Date(holiday.endDate).getMonth()
+        const endDay = new Date(holiday.endDate).getDate()
+
+        const checkMonth = checkDate.getMonth()
+        const checkDay = checkDate.getDate()
+
+        // Simple check for single day or same month range
+        if (startMonth === endMonth) {
+            if (checkMonth === startMonth && checkDay >= startDay && checkDay <= endDay) {
+                return true
+            }
+        } else {
+            // Multi-month range (e.g., Dec 31 - Jan 2)
+            if (
+                (checkMonth === startMonth && checkDay >= startDay) ||
+                (checkMonth === endMonth && checkDay <= endDay) ||
+                (checkMonth > startMonth && checkMonth < endMonth)
+            ) {
+                return true
+            }
+        }
+    }
+
+    return false
 }
 
 // Static method to get upcoming holidays
@@ -251,14 +223,14 @@ HolidaySchema.statics.getUpcomingHolidays = async function (limit: number = 10):
     // Get varying holidays from today onwards
     const varyingHolidays = await this.find({
         type: HolidayTypes.VARYING,
-        date: { $gte: today },
+        endDate: { $gte: today },
     })
-        .sort({ date: 1 })
+        .sort({ startDate: 1 })
         .limit(limit)
         .lean()
 
     for (const holiday of varyingHolidays) {
-        holidays.push({ holiday, date: holiday.date })
+        holidays.push({ holiday, date: holiday.startDate })
     }
 
     // Get fixed holidays and calculate their next occurrence
@@ -266,12 +238,15 @@ HolidaySchema.statics.getUpcomingHolidays = async function (limit: number = 10):
     const currentYear = today.getFullYear()
 
     for (const holiday of fixedHolidays) {
+        const startMonth = new Date(holiday.startDate).getMonth()
+        const startDay = new Date(holiday.startDate).getDate()
+
         // Check this year
-        let holidayDate = new Date(currentYear, holiday.fixedMonth - 1, holiday.fixedDay)
+        let holidayDate = new Date(currentYear, startMonth, startDay)
 
         // If already passed this year, check next year
         if (holidayDate < today) {
-            holidayDate = new Date(currentYear + 1, holiday.fixedMonth - 1, holiday.fixedDay)
+            holidayDate = new Date(currentYear + 1, startMonth, startDay)
         }
 
         holidays.push({ holiday, date: holidayDate })
@@ -282,26 +257,6 @@ HolidaySchema.statics.getUpcomingHolidays = async function (limit: number = 10):
 
     return holidays.slice(0, limit).map((item) => item.holiday)
 }
-
-// Virtual for next occurrence
-HolidaySchema.virtual("nextOccurrence").get(function () {
-    const today = new Date()
-
-    if (this.type === HolidayTypes.VARYING) {
-        return this.date >= today ? this.date : null
-    } else if (this.type === HolidayTypes.FIXED) {
-        const currentYear = today.getFullYear()
-        let nextDate = new Date(currentYear, this.fixedMonth - 1, this.fixedDay)
-
-        if (nextDate < today) {
-            nextDate = new Date(currentYear + 1, this.fixedMonth - 1, this.fixedDay)
-        }
-
-        return nextDate
-    }
-
-    return null
-})
 
 // Ensure virtual fields are included in JSON output
 HolidaySchema.set("toJSON", {

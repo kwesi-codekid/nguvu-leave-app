@@ -4,7 +4,8 @@ interface AuthSessionInterface {
     token: string
     refreshToken: string
     user: {
-        id: string
+        _id: string
+        id?: string // Staff ID (optional, for backward compatibility)
         email?: string
         phone: string
         name: string
@@ -12,6 +13,7 @@ interface AuthSessionInterface {
         permissions: string[]
         profilePicture?: string
         jobTitle?: string
+        gender?: string
     }
 }
 

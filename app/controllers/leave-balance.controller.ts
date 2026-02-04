@@ -124,7 +124,7 @@ export class LeaveBalanceController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER") ||
-                staffId === user?._id
+                staffId === user?._id?.toString()
 
             if (!canView) {
                 return errorResponseObject(
@@ -270,7 +270,7 @@ export class LeaveBalanceController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER") ||
-                staffId === user?._id
+                staffId === user?._id?.toString()
 
             if (!canView) {
                 return errorResponseObject("Unauthorized to view this balance")
@@ -1610,7 +1610,7 @@ export class LeaveBalanceController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER") ||
-                staffId === user?._id
+                staffId === user?._id?.toString()
 
             if (!canCheck) {
                 return errorResponseObject("Unauthorized to check availability")
@@ -2733,7 +2733,7 @@ export class LeaveBalanceController {
             const canView =
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
-                staffId === user?._id
+                staffId === user?._id?.toString()
 
             if (!canView) {
                 return errorResponseObject(

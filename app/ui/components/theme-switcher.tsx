@@ -4,7 +4,7 @@ import { useTheme } from "next-themes"
 import { useEffect, useState } from "react"
 
 export const ThemeSwitcher = () => {
-    const { theme, setTheme } = useTheme()
+    const { theme, setTheme, resolvedTheme } = useTheme()
     const [mounted, setMounted] = useState(false)
 
     useEffect(() => {
@@ -13,18 +13,20 @@ export const ThemeSwitcher = () => {
 
     if (!mounted) return <Skeleton className='size-8 rounded-full' />
 
+    const isDark = resolvedTheme === "dark"
+
     return (
         <Button
             size='sm'
             variant='flat'
             isIconOnly
             radius='full'
-            onPress={() => setTheme(theme === "dark" ? "light" : "dark")}
+            onPress={() => setTheme(isDark ? "light" : "dark")}
         >
-            {theme !== "dark" ? (
-                <MoonIcon className='text-zinc-500 size-5' />
-            ) : (
+            {isDark ? (
                 <SunIcon className='text-zinc-500 size-5' />
+            ) : (
+                <MoonIcon className='text-zinc-500 size-5' />
             )}
         </Button>
     )

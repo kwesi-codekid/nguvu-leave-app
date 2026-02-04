@@ -15,14 +15,15 @@ export class HolidayController {
      */
     static async createHoliday(req: Request): Promise<ResponseObject> {
         try {
-            const { name, type, date, fixedMonth, fixedDay, description } =
-                req.body
-            const user = (req as any).user // Assuming auth middleware adds user
+            const { name, type, startDate, endDate, description } = req.body
+            const user = (req as any).user
+
+            console.log("Holiday creation request:", { name, type, startDate, endDate, description, user: user?.name, permissions: user?.permissions })
 
             // Check if user has HR permission
-            if (!user?.permissions?.includes("HR")) {
+            if (!user?.permissions?.includes("HR") && !user?.permissions?.includes("ADMIN")) {
                 return errorResponseObject(
-                    "Unauthorized. Only HR can create holidays"
+                    "Unauthorized. Only HR/Admin can create holidays"
                 )
             }
 
@@ -37,108 +38,80 @@ export class HolidayController {
             if (!type || !Object.values(HolidayTypes).includes(type)) {
                 errors.push({
                     field: "type",
-                    message:
-                        "Valid holiday type is required (fixed or varying)",
+                    message: "Valid holiday type is required (fixed or varying)",
                 })
             }
+            if (!startDate) {
+                errors.push({
+                    field: "startDate",
+                    message: "Start date is required",
+                })
+            } else {
+                const parsedStartDate = new Date(startDate)
+                if (isNaN(parsedStartDate.getTime())) {
+                    errors.push({
+                        field: "startDate",
+                        message: "Invalid start date format",
+                    })
+                }
+            }
 
-            if (type === HolidayTypes.VARYING) {
-                if (!date) {
-                    errors.push({
-                        field: "date",
-                        message: "Date is required for varying holidays",
-                    })
-                } else {
-                    const parsedDate = new Date(date)
-                    if (isNaN(parsedDate.getTime())) {
-                        errors.push({
-                            field: "date",
-                            message: "Invalid date format",
-                        })
-                    }
-                }
-            } else if (type === HolidayTypes.FIXED) {
-                if (!fixedMonth || fixedMonth < 1 || fixedMonth > 12) {
-                    errors.push({
-                        field: "fixedMonth",
-                        message:
-                            "Valid month (1-12) is required for fixed holidays",
-                    })
-                }
-                if (!fixedDay || fixedDay < 1 || fixedDay > 31) {
-                    errors.push({
-                        field: "fixedDay",
-                        message:
-                            "Valid day (1-31) is required for fixed holidays",
-                    })
-                }
+            console.log("Validation errors:", errors)
 
-                // Validate day is valid for the month
-                if (fixedMonth && fixedDay) {
-                    const testDate = new Date(2024, fixedMonth - 1, fixedDay)
-                    if (testDate.getMonth() !== fixedMonth - 1) {
-                        errors.push({
-                            field: "fixedDay",
-                            message: `Day ${fixedDay} is not valid for month ${fixedMonth}`,
-                        })
-                    }
+            if (errors.length > 0) {
+                return validationErrorResponseObject("Validation failed", errors)
+            }
+
+            // End date validation (optional, defaults to startDate)
+            let finalEndDate = endDate || startDate
+            if (endDate) {
+                const parsedEndDate = new Date(endDate)
+                if (isNaN(parsedEndDate.getTime())) {
+                    errors.push({
+                        field: "endDate",
+                        message: "Invalid end date format",
+                    })
+                } else if (new Date(endDate) < new Date(startDate)) {
+                    errors.push({
+                        field: "endDate",
+                        message: "End date cannot be before start date",
+                    })
                 }
             }
 
             if (errors.length > 0) {
-                return validationErrorResponseObject(
-                    "Validation failed",
-                    errors
-                )
+                return validationErrorResponseObject("Validation failed", errors)
             }
 
             // Check for duplicate holidays
+            console.log("Checking for duplicate holidays...")
             const existingQuery: any = {
                 name: { $regex: new RegExp(`^${name.trim()}$`, "i") },
-            }
-            if (type === HolidayTypes.FIXED) {
-                existingQuery.type = HolidayTypes.FIXED
-                existingQuery.fixedMonth = fixedMonth
-                existingQuery.fixedDay = fixedDay
-            } else if (type === HolidayTypes.VARYING) {
-                // For varying holidays, check if same name exists for the same year
-                const holidayDate = new Date(date)
-                const yearStart = new Date(holidayDate.getFullYear(), 0, 1)
-                const yearEnd = new Date(
-                    holidayDate.getFullYear(),
-                    11,
-                    31,
-                    23,
-                    59,
-                    59
-                )
-                existingQuery.type = HolidayTypes.VARYING
-                existingQuery.date = { $gte: yearStart, $lte: yearEnd }
             }
 
             const existing = await Holiday.findOne(existingQuery)
             if (existing) {
                 return errorResponseObject(
-                    "A holiday with similar details already exists"
+                    "A holiday with this name already exists"
                 )
             }
+
+            console.log("No duplicate found, creating holiday...")
 
             // Create holiday
             const holidayData: any = {
                 name: name.trim(),
                 type,
+                startDate: new Date(startDate),
+                endDate: new Date(finalEndDate),
                 description: description?.trim(),
                 createdBy: user._id,
             }
 
-            if (type === HolidayTypes.VARYING) {
-                holidayData.date = new Date(date)
-            } else {
-                holidayData.fixedMonth = fixedMonth
-                holidayData.fixedDay = fixedDay
-            }
+            console.log("Holiday data to create:", holidayData)
 
             const holiday = await Holiday.create(holidayData)
+            console.log("Holiday created:", holiday._id)
 
             // Log to audit
             await AuditLogController.createAuditLog({
@@ -152,21 +125,19 @@ export class HolidayController {
                 metadata: {
                     holidayType: type,
                     holidayName: name,
-                    ...(type === HolidayTypes.VARYING
-                        ? { date }
-                        : { fixedMonth, fixedDay }),
+                    startDate,
+                    endDate: finalEndDate,
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
             })
 
-            return successResponseObject(
-                "Holiday created successfully",
-                holiday
-            )
-        } catch (error) {
+            return successResponseObject("Holiday created successfully", holiday)
+        } catch (error: any) {
             console.error("Error creating holiday:", error)
-            return errorResponseObject("Failed to create holiday")
+            console.error("Error stack:", error?.stack)
+            console.error("Error message:", error?.message)
+            return errorResponseObject(`Failed to create holiday: ${error?.message || 'Unknown error'}`)
         }
     }
 
@@ -182,8 +153,7 @@ export class HolidayController {
                 search = "",
                 type,
                 year,
-                month,
-                sortBy = "name",
+                sortBy = "startDate",
                 sortOrder = "asc",
             } = req.query
 
@@ -205,106 +175,25 @@ export class HolidayController {
             }
 
             // Filter by type
-            if (
-                type &&
-                Object.values(HolidayTypes).includes(type as HolidayTypes)
-            ) {
+            if (type && Object.values(HolidayTypes).includes(type as HolidayTypes)) {
                 query.type = type
             }
 
-            // Filter by year
-            if (year) {
+            // Filter by year (for varying holidays)
+            if (year && !isNaN(Number(year))) {
                 const yearNum = Number(year)
-                if (!isNaN(yearNum)) {
-                    const yearStart = new Date(yearNum, 0, 1)
-                    const yearEnd = new Date(yearNum, 11, 31, 23, 59, 59)
+                const yearStart = new Date(yearNum, 0, 1)
+                const yearEnd = new Date(yearNum, 11, 31, 23, 59, 59)
 
-                    if (query.type === HolidayTypes.VARYING) {
-                        // For varying holidays, filter by date
-                        query.date = { $gte: yearStart, $lte: yearEnd }
-                    } else if (!query.type) {
-                        // If no type specified, get both fixed and varying for the year
-                        const baseQuery = { ...query }
-                        delete baseQuery.$or // Preserve search if exists
-
-                        const orConditions = [
-                            { ...baseQuery, type: HolidayTypes.FIXED },
-                            {
-                                ...baseQuery,
-                                type: HolidayTypes.VARYING,
-                                date: { $gte: yearStart, $lte: yearEnd },
-                            },
-                        ]
-
-                        // Merge with existing $or if search is present
-                        if (query.$or) {
-                            query.$and = [
-                                { $or: query.$or },
-                                { $or: orConditions },
-                            ]
-                            delete query.$or
-                        } else {
-                            query.$or = orConditions
-                        }
-                    }
-                }
-            }
-
-            // Filter by month
-            if (month) {
-                const monthNum = Number(month)
-                if (!isNaN(monthNum) && monthNum >= 1 && monthNum <= 12) {
-                    if (query.type === HolidayTypes.FIXED) {
-                        query.fixedMonth = monthNum
-                    } else if (query.type === HolidayTypes.VARYING) {
-                        // For varying holidays, check if the date falls in this month
-                        const yearNum = year
-                            ? Number(year)
-                            : new Date().getFullYear()
-                        const monthStart = new Date(yearNum, monthNum - 1, 1)
-                        const monthEnd = new Date(
-                            yearNum,
-                            monthNum,
-                            0,
-                            23,
-                            59,
-                            59
-                        )
-
-                        if (query.date) {
-                            // Merge with year filter if exists
-                            query.date.$gte = new Date(
-                                Math.max(
-                                    query.date.$gte?.getTime() || 0,
-                                    monthStart.getTime()
-                                )
-                            )
-                            query.date.$lte = new Date(
-                                Math.min(
-                                    query.date.$lte?.getTime() || Infinity,
-                                    monthEnd.getTime()
-                                )
-                            )
-                        } else {
-                            query.date = { $gte: monthStart, $lte: monthEnd }
-                        }
-                    }
+                if (query.type === HolidayTypes.VARYING) {
+                    query.startDate = { $gte: yearStart, $lte: yearEnd }
                 }
             }
 
             // Sorting
             const sortOptions: any = {}
-            const validSortFields = [
-                "name",
-                "type",
-                "date",
-                "createdAt",
-                "fixedMonth",
-                "fixedDay",
-            ]
-            const sortField = validSortFields.includes(sortBy as string)
-                ? sortBy
-                : "name"
+            const validSortFields = ["name", "type", "startDate", "endDate", "createdAt"]
+            const sortField = validSortFields.includes(sortBy as string) ? sortBy : "startDate"
             sortOptions[sortField as string] = sortOrder === "desc" ? -1 : 1
 
             // Execute queries
@@ -318,39 +207,9 @@ export class HolidayController {
                 Holiday.countDocuments(query),
             ])
 
-            // Add next occurrence to each holiday
-            const today = new Date()
-            const holidaysWithOccurrence = holidays.map((holiday) => {
-                let nextOccurrence = null
-
-                if (holiday.type === HolidayTypes.VARYING) {
-                    if (holiday.date && new Date(holiday.date) >= today) {
-                        nextOccurrence = holiday.date
-                    }
-                } else if (holiday.type === HolidayTypes.FIXED) {
-                    const currentYear = today.getFullYear()
-                    let nextDate = new Date(
-                        currentYear,
-                        (holiday.fixedMonth || 1) - 1,
-                        holiday.fixedDay
-                    )
-
-                    if (nextDate < today) {
-                        nextDate = new Date(
-                            currentYear + 1,
-                            (holiday.fixedMonth || 1) - 1,
-                            holiday.fixedDay
-                        )
-                    }
-                    nextOccurrence = nextDate
-                }
-
-                return { ...holiday, nextOccurrence }
-            })
-
             // Response with pagination metadata
             const response = {
-                holidays: holidaysWithOccurrence,
+                holidays,
                 pagination: {
                     currentPage: pageNum,
                     totalPages: Math.ceil(totalCount / limitNum),
@@ -363,14 +222,10 @@ export class HolidayController {
                     search: search || null,
                     type: type || null,
                     year: year ? Number(year) : null,
-                    month: month ? Number(month) : null,
                 },
             }
 
-            return successResponseObject(
-                "Holidays retrieved successfully",
-                response
-            )
+            return successResponseObject("Holidays retrieved successfully", response)
         } catch (error) {
             console.error("Error fetching holidays:", error)
             return errorResponseObject("Failed to retrieve holidays")
@@ -381,10 +236,7 @@ export class HolidayController {
      * Get specific holiday by ID
      * GET /api/holidays/:id
      */
-    static async getHolidayById(
-        req: Request,
-        id: string
-    ): Promise<ResponseObject> {
+    static async getHolidayById(req: Request, id: string): Promise<ResponseObject> {
         try {
             if (!id) {
                 return validationErrorResponseObject("Validation failed", [
@@ -400,38 +252,7 @@ export class HolidayController {
                 return errorResponseObject("Holiday not found")
             }
 
-            // Add next occurrence
-            const today = new Date()
-            let nextOccurrence = null
-
-            if (holiday.type === HolidayTypes.VARYING) {
-                if (holiday.date && new Date(holiday.date) >= today) {
-                    nextOccurrence = holiday.date
-                }
-            } else if (holiday.type === HolidayTypes.FIXED) {
-                const currentYear = today.getFullYear()
-                let nextDate = new Date(
-                    currentYear,
-                    (holiday.fixedMonth || 1) - 1,
-                    holiday.fixedDay
-                )
-
-                if (nextDate < today) {
-                    nextDate = new Date(
-                        currentYear + 1,
-                        (holiday.fixedMonth || 1) - 1,
-                        holiday.fixedDay
-                    )
-                }
-                nextOccurrence = nextDate
-            }
-
-            const holidayWithOccurrence = { ...holiday, nextOccurrence }
-
-            return successResponseObject(
-                "Holiday retrieved successfully",
-                holidayWithOccurrence
-            )
+            return successResponseObject("Holiday retrieved successfully", holiday)
         } catch (error) {
             console.error("Error fetching holiday:", error)
             return errorResponseObject("Failed to retrieve holiday")
@@ -442,19 +263,14 @@ export class HolidayController {
      * Update a holiday
      * PUT /api/holidays/:id
      */
-    static async updateHoliday(
-        req: Request,
-        id: string
-    ): Promise<ResponseObject> {
+    static async updateHoliday(req: Request, id: string): Promise<ResponseObject> {
         try {
-            const { name, date, fixedMonth, fixedDay, description } = req.body
+            const { name, startDate, endDate, description } = req.body
             const user = (req as any).user
 
             // Check HR permission
-            if (!user?.permissions?.includes("HR")) {
-                return errorResponseObject(
-                    "Unauthorized. Only HR can update holidays"
-                )
+            if (!user?.permissions?.includes("HR") && !user?.permissions?.includes("ADMIN")) {
+                return errorResponseObject("Unauthorized. Only HR/Admin can update holidays")
             }
 
             if (!id) {
@@ -473,7 +289,7 @@ export class HolidayController {
             const changes = []
             const updates: any = {}
 
-            // Update basic fields
+            // Update name
             if (name && name.trim() && name.trim() !== holiday.name) {
                 changes.push({
                     field: "name",
@@ -484,6 +300,7 @@ export class HolidayController {
                 updates.name = name.trim()
             }
 
+            // Update description
             if (description !== undefined) {
                 const newDesc = description?.trim() || ""
                 if (newDesc !== (holiday.description || "")) {
@@ -497,71 +314,51 @@ export class HolidayController {
                 }
             }
 
-            // Handle type-specific updates
-            if (holiday.type === HolidayTypes.VARYING && date) {
-                const newDate = new Date(date)
-                if (!isNaN(newDate.getTime())) {
-                    const oldDateStr = holiday.date?.toISOString()
-                    const newDateStr = newDate.toISOString()
+            // Update startDate
+            if (startDate) {
+                const newStartDate = new Date(startDate)
+                if (!isNaN(newStartDate.getTime())) {
+                    const oldStartStr = holiday.startDate?.toISOString()
+                    const newStartStr = newStartDate.toISOString()
 
-                    if (oldDateStr !== newDateStr) {
+                    if (oldStartStr !== newStartStr) {
                         changes.push({
-                            field: "date",
-                            oldValue: holiday.date,
-                            newValue: newDate,
-                            fieldLabel: "Holiday Date",
+                            field: "startDate",
+                            oldValue: holiday.startDate,
+                            newValue: newStartDate,
+                            fieldLabel: "Start Date",
                         })
-                        updates.date = newDate
+                        updates.startDate = newStartDate
                     }
                 }
-            } else if (holiday.type === HolidayTypes.FIXED) {
-                if (
-                    fixedMonth &&
-                    fixedMonth >= 1 &&
-                    fixedMonth <= 12 &&
-                    fixedMonth !== holiday.fixedMonth
-                ) {
-                    changes.push({
-                        field: "fixedMonth",
-                        oldValue: holiday.fixedMonth,
-                        newValue: fixedMonth,
-                        fieldLabel: "Month",
-                    })
-                    updates.fixedMonth = fixedMonth
-                }
+            }
 
-                if (
-                    fixedDay &&
-                    fixedDay >= 1 &&
-                    fixedDay <= 31 &&
-                    fixedDay !== holiday.fixedDay
-                ) {
-                    changes.push({
-                        field: "fixedDay",
-                        oldValue: holiday.fixedDay,
-                        newValue: fixedDay,
-                        fieldLabel: "Day",
-                    })
-                    updates.fixedDay = fixedDay
-                }
+            // Update endDate
+            if (endDate) {
+                const newEndDate = new Date(endDate)
+                if (!isNaN(newEndDate.getTime())) {
+                    const oldEndStr = holiday.endDate?.toISOString()
+                    const newEndStr = newEndDate.toISOString()
 
-                // Validate the new date combination if both are being updated
-                const testMonth = updates.fixedMonth || holiday.fixedMonth
-                const testDay = updates.fixedDay || holiday.fixedDay
-                if (testMonth && testDay) {
-                    const testDate = new Date(2024, testMonth - 1, testDay)
-                    if (testDate.getMonth() !== testMonth - 1) {
-                        return validationErrorResponseObject(
-                            "Validation failed",
-                            [
-                                {
-                                    field: "fixedDay",
-                                    message: `Day ${testDay} is not valid for month ${testMonth}`,
-                                },
-                            ]
-                        )
+                    if (oldEndStr !== newEndStr) {
+                        changes.push({
+                            field: "endDate",
+                            oldValue: holiday.endDate,
+                            newValue: newEndDate,
+                            fieldLabel: "End Date",
+                        })
+                        updates.endDate = newEndDate
                     }
                 }
+            }
+
+            // Validate date range
+            const finalStartDate = updates.startDate || holiday.startDate
+            const finalEndDate = updates.endDate || holiday.endDate
+            if (finalEndDate < finalStartDate) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "endDate", message: "End date cannot be before start date" },
+                ])
             }
 
             if (Object.keys(updates).length === 0) {
@@ -569,11 +366,10 @@ export class HolidayController {
             }
 
             // Update holiday
-            const updatedHoliday = await Holiday.findByIdAndUpdate(
-                id,
-                updates,
-                { new: true, runValidators: true }
-            ).populate("createdBy", "name email")
+            const updatedHoliday = await Holiday.findByIdAndUpdate(id, updates, {
+                new: true,
+                runValidators: true,
+            }).populate("createdBy", "name email")
 
             // Log to audit
             await AuditLogController.createAuditLog({
@@ -593,10 +389,7 @@ export class HolidayController {
                 userAgent: req.headers["user-agent"],
             })
 
-            return successResponseObject(
-                "Holiday updated successfully",
-                updatedHoliday
-            )
+            return successResponseObject("Holiday updated successfully", updatedHoliday)
         } catch (error) {
             console.error("Error updating holiday:", error)
             return errorResponseObject("Failed to update holiday")
@@ -607,18 +400,13 @@ export class HolidayController {
      * Delete a holiday
      * DELETE /api/holidays/:id
      */
-    static async deleteHoliday(
-        req: Request,
-        id: string
-    ): Promise<ResponseObject> {
+    static async deleteHoliday(req: Request, id: string): Promise<ResponseObject> {
         try {
             const user = (req as any).user
 
             // Check HR permission
-            if (!user?.permissions?.includes("HR")) {
-                return errorResponseObject(
-                    "Unauthorized. Only HR can delete holidays"
-                )
+            if (!user?.permissions?.includes("HR") && !user?.permissions?.includes("ADMIN")) {
+                return errorResponseObject("Unauthorized. Only HR/Admin can delete holidays")
             }
 
             if (!id) {
@@ -647,12 +435,8 @@ export class HolidayController {
                 metadata: {
                     holidayType: holiday.type,
                     holidayName: holiday.name,
-                    ...(holiday.type === HolidayTypes.VARYING
-                        ? { date: holiday.date }
-                        : {
-                              fixedMonth: holiday.fixedMonth,
-                              fixedDay: holiday.fixedDay,
-                          }),
+                    startDate: holiday.startDate,
+                    endDate: holiday.endDate,
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
@@ -682,10 +466,7 @@ export class HolidayController {
                 select: "name email",
             })
 
-            return successResponseObject(
-                "Upcoming holidays retrieved successfully",
-                populatedHolidays
-            )
+            return successResponseObject("Upcoming holidays retrieved successfully", populatedHolidays)
         } catch (error) {
             console.error("Error fetching upcoming holidays:", error)
             return errorResponseObject("Failed to retrieve upcoming holidays")
@@ -696,10 +477,7 @@ export class HolidayController {
      * Get holidays for a specific year
      * GET /api/holidays/year/:year
      */
-    static async getHolidaysForYear(
-        req: Request,
-        year: string
-    ): Promise<ResponseObject> {
+    static async getHolidaysForYear(req: Request, year: string): Promise<ResponseObject> {
         try {
             const yearNum = Number(year)
             if (isNaN(yearNum) || yearNum < 1900 || yearNum > 2100) {
@@ -719,43 +497,25 @@ export class HolidayController {
                 select: "name email",
             })
 
-            // Sort holidays by date/month for better presentation
+            // Sort holidays by start date
             const sortedHolidays = populatedHolidays.sort((a, b) => {
-                if (
-                    a.type === HolidayTypes.VARYING &&
-                    b.type === HolidayTypes.VARYING
-                ) {
-                    return (
-                        new Date(a.date as any).getTime() -
-                        new Date(b.date as any).getTime()
-                    )
-                }
-                if (
-                    a.type === HolidayTypes.FIXED &&
-                    b.type === HolidayTypes.FIXED
-                ) {
-                    if ((a.fixedMonth || 1) !== (b.fixedMonth || 1)) {
-                        return (a.fixedMonth || 1) - (b.fixedMonth || 1)
-                    }
-                    return (a.fixedDay || 1) - (b.fixedDay || 1)
-                }
-                // Put fixed holidays before varying
-                return a.type === HolidayTypes.FIXED ? -1 : 1
+                const aMonth = new Date(a.startDate as any).getMonth()
+                const aDay = new Date(a.startDate as any).getDate()
+                const bMonth = new Date(b.startDate as any).getMonth()
+                const bDay = new Date(b.startDate as any).getDate()
+
+                if (aMonth !== bMonth) return aMonth - bMonth
+                return aDay - bDay
             })
 
-            return successResponseObject(
-                `Holidays for year ${yearNum} retrieved successfully`,
-                {
-                    year: yearNum,
-                    totalHolidays: sortedHolidays.length,
-                    holidays: sortedHolidays,
-                }
-            )
+            return successResponseObject(`Holidays for year ${yearNum} retrieved successfully`, {
+                year: yearNum,
+                totalHolidays: sortedHolidays.length,
+                holidays: sortedHolidays,
+            })
         } catch (error) {
             console.error("Error fetching holidays for year:", error)
-            return errorResponseObject(
-                "Failed to retrieve holidays for the specified year"
-            )
+            return errorResponseObject("Failed to retrieve holidays for the specified year")
         }
     }
 
@@ -790,17 +550,15 @@ export class HolidayController {
                 const endOfDay = new Date(checkDate)
                 endOfDay.setHours(23, 59, 59, 999)
 
-                // Check varying holidays
                 holidayDetails = await Holiday.findOne({
                     $or: [
                         {
                             type: HolidayTypes.VARYING,
-                            date: { $gte: startOfDay, $lte: endOfDay },
+                            startDate: { $lte: endOfDay },
+                            endDate: { $gte: startOfDay },
                         },
                         {
                             type: HolidayTypes.FIXED,
-                            fixedMonth: checkDate.getMonth() + 1,
-                            fixedDay: checkDate.getDate(),
                         },
                     ],
                 }).lean()

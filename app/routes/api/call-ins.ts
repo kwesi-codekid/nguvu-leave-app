@@ -73,6 +73,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
         } as any
 
         switch (op) {
+            case "on-leave": {
+                // Get staff currently on approved leave
+                const result = await CallInController.getStaffOnLeave(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
             case "my-call-ins": {
                 // Get my call-ins with pagination and filters
                 const result = await CallInController.getMyCallIns(req)
@@ -240,12 +248,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
                     : errorResponse(result.message, null, 500)
             }
 
-            default:
-                return errorResponse(
-                    "Invalid operation. Valid operations: my-call-ins, staff, department, history, report, summary, analytics",
-                    null,
-                    400
-                )
+            default: {
+                // Default: Get all call-ins
+                const result = await CallInController.getAllCallIns(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
         }
     } catch (error) {
         console.error("Call-ins loader error:", error)
@@ -303,6 +312,14 @@ export async function action({ request }: ActionFunctionArgs) {
         } as any
 
         switch (op) {
+            case "calculate": {
+                // Calculate recovered days (no special permissions needed beyond auth)
+                const result = await CallInController.calculateRecoveredDays(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 400)
+            }
+
             case "bulk": {
                 // Create bulk call-ins (HR/Admin only)
                 if (

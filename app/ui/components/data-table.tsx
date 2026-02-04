@@ -116,7 +116,7 @@ export const DataTable = (props: DataTableProps) => {
                 </TableHeader>
 
                 <TableBody
-                    loadingContent={null}
+                    loadingContent={<></>}
                     isLoading={props.isLoading}
                     emptyContent={
                         props.emptyContent || (

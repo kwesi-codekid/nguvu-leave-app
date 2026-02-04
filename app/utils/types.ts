@@ -10,9 +10,8 @@ export interface HolidayInterface {
     _id?: string
     name: string
     type: HolidayTypes
-    date?: Date // For varying holidays - specific date for current year
-    fixedMonth?: number // For fixed holidays - month (1-12)
-    fixedDay?: number // For fixed holidays - day (1-31)
+    startDate?: Date // Start date of the holiday
+    endDate?: Date // End date of the holiday (defaults to startDate for single day)
     description?: string // Optional description of the holiday
     createdBy?: string // Staff ID who created the holiday
     createdAt?: Date

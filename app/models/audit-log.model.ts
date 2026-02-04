@@ -129,13 +129,13 @@ AuditLogSchema.index({ createdAt: -1 })
 // AuditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 63072000 }) // 2 years in seconds
 
 // Prevent updates to audit logs (they should be immutable)
-AuditLogSchema.pre(["updateOne", "findOneAndUpdate", "updateMany"], function (next) {
-    next(new Error("Audit logs cannot be modified"))
+AuditLogSchema.pre(["updateOne", "findOneAndUpdate", "updateMany"], function () {
+    throw new Error("Audit logs cannot be modified")
 })
 
 // Prevent deletion of audit logs (except by TTL if configured)
-AuditLogSchema.pre(["deleteOne", "findOneAndDelete", "deleteMany"], function (next) {
-    next(new Error("Audit logs cannot be deleted manually"))
+AuditLogSchema.pre(["deleteOne", "findOneAndDelete", "deleteMany"], function () {
+    throw new Error("Audit logs cannot be deleted manually")
 })
 
 // Static method to create an audit log entry

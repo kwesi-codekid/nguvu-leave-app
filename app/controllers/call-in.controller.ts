@@ -6,6 +6,7 @@ import LeaveBalance from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import Department from "../models/department.model"
 import StaffContract from "../models/staff-contract.model"
+import Holiday from "../models/holiday.model"
 import AuditLogController from "./audit-log.controller"
 import SMSService from "../services/sms.service"
 import {
@@ -2548,6 +2549,206 @@ export class CallInController {
         } catch (error) {
             console.error("Error fetching call-in reasons:", error)
             return errorResponseObject("Failed to retrieve call-in reasons")
+        }
+    }
+
+    /**
+     * Get all call-ins with pagination
+     * GET /api/call-ins
+     */
+    static async getAllCallIns(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+            const { page = 1, limit = 20, search } = req.query
+
+            // Check permissions
+            const canViewAll =
+                user?.permissions?.includes("HR") ||
+                user?.permissions?.includes("ADMIN") ||
+                user?.permissions?.includes("MANAGER")
+
+            if (!canViewAll) {
+                return errorResponseObject("Unauthorized to view call-ins")
+            }
+
+            const query: any = {}
+
+            // Build search query
+            if (search) {
+                const staffIds = await Staff.find({
+                    $or: [
+                        { name: { $regex: search, $options: "i" } },
+                        { staffId: { $regex: search, $options: "i" } },
+                    ],
+                }).select("_id")
+
+                query.staff = { $in: staffIds.map((s) => s._id) }
+            }
+
+            const skip = (Number(page) - 1) * Number(limit)
+
+            const [callIns, total] = await Promise.all([
+                CallIn.find(query)
+                    .populate("staff", "name staffId email")
+                    .populate("leaveRequest", "leaveType startDate endDate workingDays")
+                    .populate("department", "name")
+                    .populate("requestedBy", "name")
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(Number(limit))
+                    .lean(),
+                CallIn.countDocuments(query),
+            ])
+
+            return successResponseObject("Call-ins retrieved successfully", {
+                callIns,
+                pagination: {
+                    page: Number(page),
+                    limit: Number(limit),
+                    total,
+                    totalPages: Math.ceil(total / Number(limit)),
+                },
+            })
+        } catch (error) {
+            console.error("Error getting call-ins:", error)
+            return errorResponseObject("Failed to retrieve call-ins")
+        }
+    }
+
+    /**
+     * Get staff currently on approved leave
+     * GET /api/call-ins?op=on-leave
+     */
+    static async getStaffOnLeave(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+
+            // Check permissions
+            const canView =
+                user?.permissions?.includes("HR") ||
+                user?.permissions?.includes("ADMIN") ||
+                user?.permissions?.includes("MANAGER")
+
+            if (!canView) {
+                return errorResponseObject("Unauthorized to view staff on leave")
+            }
+
+            const today = new Date()
+            today.setHours(0, 0, 0, 0)
+
+            // Find approved leave requests where today is within the leave period
+            const onLeaveRequests = await LeaveRequest.find({
+                status: LeaveStatus.APPROVED,
+                startDate: { $lte: today },
+                endDate: { $gte: today },
+            })
+                .populate("staff", "name staffId email department")
+                .populate("department", "name")
+                .sort({ startDate: 1 })
+                .lean()
+
+            // Calculate days remaining for each leave
+            const staffOnLeave = onLeaveRequests.map((leave: any) => {
+                const endDate = new Date(leave.endDate)
+                const diffTime = endDate.getTime() - today.getTime()
+                const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1
+
+                return {
+                    staff: leave.staff,
+                    leaveRequest: {
+                        _id: leave._id,
+                        leaveType: leave.leaveType,
+                        startDate: leave.startDate,
+                        endDate: leave.endDate,
+                        workingDays: leave.workingDays,
+                    },
+                    department: leave.department,
+                    daysRemaining,
+                }
+            })
+
+            return successResponseObject("Staff on leave retrieved successfully", {
+                staffOnLeave,
+                count: staffOnLeave.length,
+            })
+        } catch (error) {
+            console.error("Error getting staff on leave:", error)
+            return errorResponseObject("Failed to retrieve staff on leave")
+        }
+    }
+
+    /**
+     * Calculate working days that would be recovered for a call-in
+     * POST /api/call-ins?op=calculate
+     */
+    static async calculateRecoveredDays(req: Request): Promise<ResponseObject> {
+        try {
+            const { leaveRequestId, callInStartDate, callInEndDate } = req.body
+
+            if (!leaveRequestId || !callInStartDate) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "leaveRequestId", message: "Leave request ID is required" },
+                    { field: "callInStartDate", message: "Call-in start date is required" },
+                ])
+            }
+
+            // Get the leave request
+            const leaveRequest = await LeaveRequest.findById(leaveRequestId)
+            if (!leaveRequest) {
+                return errorResponseObject("Leave request not found")
+            }
+
+            // Parse dates
+            const startDate = new Date(callInStartDate)
+            const endDate = callInEndDate ? new Date(callInEndDate) : new Date(callInStartDate)
+
+            // Validate dates are within leave period
+            const leaveStart = new Date(leaveRequest.startDate)
+            const leaveEnd = new Date(leaveRequest.endDate)
+
+            if (startDate < leaveStart || endDate > leaveEnd) {
+                return errorResponseObject(
+                    "Call-in dates must be within the leave period"
+                )
+            }
+
+            // Calculate working days (excluding weekends and holidays)
+            let workingDays = 0
+
+            const current = new Date(startDate)
+            while (current <= endDate) {
+                const dayOfWeek = current.getDay()
+
+                // Skip weekends
+                if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+                    // Check if it's a holiday
+                    const isHoliday = await Holiday.isHoliday(current)
+                    if (!isHoliday) {
+                        workingDays++
+                    }
+                }
+
+                current.setDate(current.getDate() + 1)
+            }
+
+            // Calculate resumption date (day after call-in ends)
+            const resumptionDate = new Date(endDate)
+            resumptionDate.setDate(resumptionDate.getDate() + 1)
+
+            return successResponseObject("Days calculated successfully", {
+                workingDaysRecovered: workingDays,
+                callInStartDate: startDate,
+                callInEndDate: endDate,
+                resumptionDate,
+                originalLeave: {
+                    startDate: leaveRequest.startDate,
+                    endDate: leaveRequest.endDate,
+                    workingDays: leaveRequest.workingDays,
+                },
+            })
+        } catch (error) {
+            console.error("Error calculating recovered days:", error)
+            return errorResponseObject("Failed to calculate recovered days")
         }
     }
 

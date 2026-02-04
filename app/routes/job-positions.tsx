@@ -22,6 +22,7 @@ import {
     TableRow,
     Tooltip,
     useDisclosure,
+    addToast,
 } from "@heroui/react"
 import { useState } from "react"
 import axios from "axios"
@@ -146,11 +147,19 @@ export default function JobPositions() {
             })
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Job position created successfully",
+            })
         } catch (error: any) {
             console.error("Error creating position:", error)
-            alert(
-                error.response?.data?.message || "Failed to create job position"
-            )
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to create job position",
+            })
         } finally {
             setIsSubmitting(false)
         }
@@ -201,11 +210,19 @@ export default function JobPositions() {
 
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Job position updated successfully",
+            })
         } catch (error: any) {
             console.error("Error updating position:", error)
-            alert(
-                error.response?.data?.message || "Failed to update job position"
-            )
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to update job position",
+            })
         } finally {
             setIsSubmitting(false)
         }
@@ -233,11 +250,19 @@ export default function JobPositions() {
             )
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Job position deleted successfully",
+            })
         } catch (error: any) {
             console.error("Error deleting position:", error)
-            alert(
-                error.response?.data?.message || "Failed to delete job position"
-            )
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to delete job position",
+            })
         } finally {
             setIsDeleting(false)
         }

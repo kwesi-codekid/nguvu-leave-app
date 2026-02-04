@@ -136,10 +136,10 @@ export async function action({ request }: ActionFunctionArgs) {
             return errorResponse("Unauthorized", null, 401)
         }
 
-        // Check HR permission
-        if (!user.permissions?.includes("HR")) {
+        // Check HR or Admin permission
+        if (!user.permissions?.includes("HR") && !user.permissions?.includes("ADMIN")) {
             return errorResponse(
-                "Unauthorized. Only HR can create holidays",
+                "Unauthorized. Only HR/Admin can create holidays",
                 null,
                 403
             )
@@ -148,17 +148,22 @@ export async function action({ request }: ActionFunctionArgs) {
         await connectDB()
         const body = await request.json()
 
+        console.log("Holiday create body:", body)
+        console.log("User:", user?.name, "Permissions:", user?.permissions)
+
         // Prepare request object for controller
         const req = {
             body,
             user,
             ip: request.headers.get("x-forwarded-for") || "unknown",
+            socket: { remoteAddress: "unknown" },
             headers: {
                 "user-agent": request.headers.get("user-agent"),
             },
         } as any
 
         const result = await HolidayController.createHoliday(req)
+        console.log("Holiday create result:", result)
 
         if (result.status !== "success") {
             if (result.errors) {

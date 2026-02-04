@@ -27,6 +27,7 @@ import {
     useDisclosure,
     CheckboxGroup,
     Checkbox,
+    addToast,
 } from "@heroui/react"
 import { useState } from "react"
 import axios from "axios"
@@ -115,6 +116,7 @@ export default function Staff() {
         staffId: "",
         department: "",
         gender: "",
+        password: "",
         permissions: ["STAFF"] as string[],
     })
 
@@ -126,6 +128,7 @@ export default function Staff() {
         staffId: "",
         department: "",
         gender: "",
+        password: "",
         permissions: [] as string[],
     })
 
@@ -162,6 +165,7 @@ export default function Staff() {
                     staffId: formData.staffId || generateStaffId(),
                     department: formData.department,
                     gender: formData.gender,
+                    password: formData.password || undefined,
                     permissions: formData.permissions,
                 },
                 {
@@ -178,15 +182,24 @@ export default function Staff() {
                 staffId: "",
                 department: "",
                 gender: "",
+                password: "",
                 permissions: ["STAFF"],
             })
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Staff member created successfully",
+            })
         } catch (error: any) {
             console.error("Error creating staff:", error)
-            alert(
-                error.response?.data?.message || "Failed to create staff member"
-            )
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to create staff member",
+            })
         } finally {
             setIsSubmitting(false)
         }
@@ -208,6 +221,7 @@ export default function Staff() {
             staffId: staff.staffId,
             department: (staff.department as any)?._id || "",
             gender: staff.gender,
+            password: "",
             permissions: staff.permissions || [],
         })
         editDisclosure.onOpen()
@@ -228,6 +242,7 @@ export default function Staff() {
                     staffId: editFormData.staffId,
                     department: editFormData.department,
                     gender: editFormData.gender,
+                    password: editFormData.password || undefined,
                 },
                 {
                     headers: {
@@ -256,11 +271,19 @@ export default function Staff() {
 
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Staff member updated successfully",
+            })
         } catch (error: any) {
             console.error("Error updating staff:", error)
-            alert(
-                error.response?.data?.message || "Failed to update staff member"
-            )
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to update staff member",
+            })
         } finally {
             setIsSubmitting(false)
         }
@@ -285,11 +308,19 @@ export default function Staff() {
             })
             mutate() // Refresh the list
             onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Staff member deleted successfully",
+            })
         } catch (error: any) {
             console.error("Error deleting staff:", error)
-            alert(
-                error.response?.data?.message || "Failed to delete staff member"
-            )
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to delete staff member",
+            })
         } finally {
             setIsDeleting(false)
         }
@@ -629,6 +660,22 @@ export default function Staff() {
                                     onValueChange={(value) =>
                                         setFormData({ ...formData, email: value })
                                     }
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='Password'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter password (optional)'
+                                    type='password'
+                                    value={formData.password}
+                                    onValueChange={(value) =>
+                                        setFormData({ ...formData, password: value })
+                                    }
+                                    description='Leave empty if using OTP login only'
                                     classNames={{
                                         inputWrapper:
                                             "border-zinc-200 dark:border-zinc-800",
@@ -1101,6 +1148,25 @@ export default function Staff() {
                                             email: value,
                                         })
                                     }
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='New Password'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter new password (optional)'
+                                    type='password'
+                                    value={editFormData.password}
+                                    onValueChange={(value) =>
+                                        setEditFormData({
+                                            ...editFormData,
+                                            password: value,
+                                        })
+                                    }
+                                    description='Leave empty to keep current password'
                                     classNames={{
                                         inputWrapper:
                                             "border-zinc-200 dark:border-zinc-800",

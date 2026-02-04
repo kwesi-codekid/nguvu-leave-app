@@ -10,6 +10,7 @@ import {
     Logs,
     LayoutDashboard,
     ChartNoAxesColumn,
+    CalendarDays,
 } from "lucide-react"
 
 export const navlinks: {
@@ -29,6 +30,12 @@ export const navlinks: {
         icon: <FilePenLine className='w-5 h-5' />,
         permittedRoles: ["STAFF", "MANAGER", "HR", "ADMIN"],
         href: "/leave-requests",
+    },
+    {
+        label: "Leave Calendar",
+        icon: <CalendarDays className='w-5 h-5' />,
+        permittedRoles: ["STAFF", "MANAGER", "HR", "ADMIN"],
+        href: "/leave-calendar",
     },
     // {
     //     label: "Leave Balances",

@@ -1114,7 +1114,7 @@ export class StaffContractController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER") ||
-                staffId === user?._id
+                staffId === user?.staffId
 
             if (!canView) {
                 return errorResponseObject("Unauthorized to view this contract")
@@ -1143,7 +1143,7 @@ export class StaffContractController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("FINANCE") ||
-                staffId === user?._id
+                staffId === user?.staffId
 
             if (!canViewSalary) {
                 delete (contract as any).salary
@@ -1208,7 +1208,7 @@ export class StaffContractController {
             const canView =
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
-                staffId === user?._id
+                staffId === user?.staffId
 
             if (!canView) {
                 return errorResponseObject(
@@ -1235,7 +1235,7 @@ export class StaffContractController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("FINANCE") ||
-                staffId === user?._id
+                staffId === user?.staffId
 
             const processedContracts = contracts.map((contract) => {
                 const processed = { ...contract }
@@ -1286,6 +1286,315 @@ export class StaffContractController {
         } catch (error) {
             console.error("Error fetching contract history:", error)
             return errorResponseObject("Failed to retrieve contract history")
+        }
+    }
+
+    /**
+     * Get all contracts with filters (regardless of status)
+     * GET /api/contracts?op=all
+     */
+    static async getAllContracts(req: Request): Promise<ResponseObject> {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                department,
+                position,
+                search,
+                status,
+            } = req.query
+
+            const user = (req as any).user
+
+            // Check permissions
+            if (
+                !user?.permissions?.includes("HR") &&
+                !user?.permissions?.includes("ADMIN") &&
+                !user?.permissions?.includes("MANAGER")
+            ) {
+                return errorResponseObject("Unauthorized to view contracts")
+            }
+
+            // Pagination
+            const pageNum = Math.max(1, Number(page))
+            const limitNum = Math.min(100, Math.max(1, Number(limit)))
+            const skip = (pageNum - 1) * limitNum
+
+            // Build query - no status filter by default (get all)
+            const query: any = {}
+
+            // Filter by status if provided
+            if (status && typeof status === "string") {
+                query.status = status
+            }
+
+            // Filter by department/position if provided
+            if (department) {
+                const positions = await JobPosition.find({ department }).select(
+                    "_id"
+                )
+                query.position = { $in: positions.map((p) => p._id) }
+            }
+            if (position) {
+                query.position = position
+            }
+
+            // Search by staff name if provided
+            if (search && typeof search === "string" && search.trim()) {
+                const searchTerm = search.trim()
+                const matchingStaff = await Staff.find({
+                    $or: [
+                        { name: { $regex: searchTerm, $options: "i" } },
+                        { staffId: { $regex: searchTerm, $options: "i" } },
+                    ],
+                }).select("_id")
+
+                const staffFilter = matchingStaff.map((s) => s._id)
+                if (staffFilter.length > 0) {
+                    query.staff = { $in: staffFilter }
+                } else {
+                    // No matching staff, return empty result
+                    return successResponseObject(
+                        "Contracts retrieved successfully",
+                        {
+                            contracts: [],
+                            pagination: {
+                                currentPage: pageNum,
+                                totalPages: 0,
+                                totalRecords: 0,
+                                recordsPerPage: limitNum,
+                                hasNext: false,
+                                hasPrev: false,
+                            },
+                        }
+                    )
+                }
+            }
+
+            // Execute query
+            const [contracts, totalCount] = await Promise.all([
+                StaffContract.find(query)
+                    .populate("staff", "name staffId email department")
+                    .populate("position", "title")
+                    .populate({
+                        path: "position",
+                        populate: {
+                            path: "department",
+                            select: "name",
+                        },
+                    })
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limitNum)
+                    .lean(),
+                StaffContract.countDocuments(query),
+            ])
+
+            // Process contracts
+            const canViewSalary =
+                user?.permissions?.includes("HR") ||
+                user?.permissions?.includes("ADMIN") ||
+                user?.permissions?.includes("FINANCE")
+
+            const processedContracts = contracts.map((contract) => {
+                const processed = { ...contract }
+
+                if (!canViewSalary) {
+                    delete (processed as any).salary
+                    delete (processed as any).currency
+                }
+
+                // Add remaining days for active contracts with end date
+                ;(processed as any).remainingDays =
+                    contract.status === ContractStatus.ACTIVE && contract.endDate
+                        ? Math.max(
+                              0,
+                              Math.ceil(
+                                  (new Date(contract.endDate).getTime() -
+                                      new Date().getTime()) /
+                                      (1000 * 60 * 60 * 24)
+                              )
+                          )
+                        : null
+
+                return processed
+            })
+
+            // Statistics
+            const allContracts = await StaffContract.find({})
+            const statistics = {
+                total: await StaffContract.countDocuments({}),
+                active: await StaffContract.countDocuments({ status: ContractStatus.ACTIVE }),
+                pending: await StaffContract.countDocuments({ status: ContractStatus.PENDING }),
+                expired: await StaffContract.countDocuments({ status: ContractStatus.EXPIRED }),
+                expiringSoon: allContracts.filter(
+                    (c) =>
+                        c.status === ContractStatus.ACTIVE &&
+                        c.endDate &&
+                        Math.ceil(
+                            (new Date(c.endDate).getTime() -
+                                new Date().getTime()) /
+                                (1000 * 60 * 60 * 24)
+                        ) <= 30
+                ).length,
+            }
+
+            return successResponseObject(
+                "Contracts retrieved successfully",
+                {
+                    contracts: processedContracts,
+                    statistics,
+                    pagination: {
+                        currentPage: pageNum,
+                        totalPages: Math.ceil(totalCount / limitNum),
+                        totalRecords: totalCount,
+                        recordsPerPage: limitNum,
+                        hasNext: skip + limitNum < totalCount,
+                        hasPrev: pageNum > 1,
+                    },
+                }
+            )
+        } catch (error) {
+            console.error("Error fetching contracts:", error)
+            return errorResponseObject("Failed to retrieve contracts")
+        }
+    }
+
+    /**
+     * Get pending contracts
+     * GET /api/contracts?op=pending
+     */
+    static async getPendingContracts(req: Request): Promise<ResponseObject> {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                search,
+            } = req.query
+
+            const user = (req as any).user
+
+            // Check permissions
+            if (
+                !user?.permissions?.includes("HR") &&
+                !user?.permissions?.includes("ADMIN") &&
+                !user?.permissions?.includes("MANAGER")
+            ) {
+                return errorResponseObject("Unauthorized to view contracts")
+            }
+
+            // Pagination
+            const pageNum = Math.max(1, Number(page))
+            const limitNum = Math.min(100, Math.max(1, Number(limit)))
+            const skip = (pageNum - 1) * limitNum
+
+            // Build query - only pending contracts
+            const query: any = { status: ContractStatus.PENDING }
+
+            // Search by staff name if provided
+            if (search && typeof search === "string" && search.trim()) {
+                const searchTerm = search.trim()
+                const matchingStaff = await Staff.find({
+                    $or: [
+                        { name: { $regex: searchTerm, $options: "i" } },
+                        { staffId: { $regex: searchTerm, $options: "i" } },
+                    ],
+                }).select("_id")
+
+                const staffFilter = matchingStaff.map((s) => s._id)
+                if (staffFilter.length > 0) {
+                    query.staff = { $in: staffFilter }
+                } else {
+                    return successResponseObject(
+                        "Pending contracts retrieved successfully",
+                        {
+                            contracts: [],
+                            pagination: {
+                                currentPage: pageNum,
+                                totalPages: 0,
+                                totalRecords: 0,
+                                recordsPerPage: limitNum,
+                                hasNext: false,
+                                hasPrev: false,
+                            },
+                        }
+                    )
+                }
+            }
+
+            // Execute query
+            const [contracts, totalCount] = await Promise.all([
+                StaffContract.find(query)
+                    .populate("staff", "name staffId email department")
+                    .populate("position", "title")
+                    .populate({
+                        path: "position",
+                        populate: {
+                            path: "department",
+                            select: "name",
+                        },
+                    })
+                    .sort({ startDate: 1 }) // Sort by start date ascending (earliest first)
+                    .skip(skip)
+                    .limit(limitNum)
+                    .lean(),
+                StaffContract.countDocuments(query),
+            ])
+
+            // Process contracts
+            const canViewSalary =
+                user?.permissions?.includes("HR") ||
+                user?.permissions?.includes("ADMIN") ||
+                user?.permissions?.includes("FINANCE")
+
+            const processedContracts = contracts.map((contract) => {
+                const processed = { ...contract }
+
+                if (!canViewSalary) {
+                    delete (processed as any).salary
+                    delete (processed as any).currency
+                }
+
+                // Calculate days until start
+                ;(processed as any).daysUntilStart = Math.ceil(
+                    (new Date(contract.startDate).getTime() -
+                        new Date().getTime()) /
+                        (1000 * 60 * 60 * 24)
+                )
+
+                return processed
+            })
+
+            // Statistics
+            const statistics = {
+                total: totalCount,
+                expiringSoon: await StaffContract.countDocuments({
+                    status: ContractStatus.ACTIVE,
+                    endDate: {
+                        $lte: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+                        $gte: new Date(),
+                    },
+                }),
+            }
+
+            return successResponseObject(
+                "Pending contracts retrieved successfully",
+                {
+                    contracts: processedContracts,
+                    statistics,
+                    pagination: {
+                        currentPage: pageNum,
+                        totalPages: Math.ceil(totalCount / limitNum),
+                        totalRecords: totalCount,
+                        recordsPerPage: limitNum,
+                        hasNext: skip + limitNum < totalCount,
+                        hasPrev: pageNum > 1,
+                    },
+                }
+            )
+        } catch (error) {
+            console.error("Error fetching pending contracts:", error)
+            return errorResponseObject("Failed to retrieve pending contracts")
         }
     }
 
