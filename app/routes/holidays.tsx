@@ -291,7 +291,7 @@ export default function Holidays() {
     }
 
     return (
-        <AppLayout user={sessionData?.user}>
+        <AppLayout user={sessionData?.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-8 pb-8'>
                 {/* header */}
                 <div className='flex justify-between items-center'>

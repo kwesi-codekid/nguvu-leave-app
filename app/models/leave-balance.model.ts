@@ -76,7 +76,7 @@ const LeaveBalanceSchema = new Schema<ILeaveBalance>(
         },
         notes: {
             type: String,
-            maxlength: 500,
+            maxlength: 2000,
         },
         createdBy: {
             type: Schema.Types.ObjectId,
@@ -140,10 +140,22 @@ LeaveBalanceSchema.methods.debit = async function (
     }
 
     this.used += days
-    if (reason && this.notes) {
-        this.notes = `${this.notes}\n${new Date().toISOString()}: Debited ${days} days - ${reason}`
-    } else if (reason) {
-        this.notes = `${new Date().toISOString()}: Debited ${days} days - ${reason}`
+    
+    const newNote = `${new Date().toISOString()}: Debited ${days} days - ${reason}`
+    
+    if (this.notes) {
+        // Check if adding new note would exceed limit
+        const combinedNotes = `${this.notes}\n${newNote}`
+        if (combinedNotes.length <= 2000) {
+            this.notes = combinedNotes
+        } else {
+            // Truncate old notes to make room for new one
+            const maxOldLength = 2000 - newNote.length - 1 // -1 for newline
+            const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
+            this.notes = `${truncatedOld}\n${newNote}`
+        }
+    } else {
+        this.notes = newNote
     }
 
     return await this.save()
@@ -156,10 +168,21 @@ LeaveBalanceSchema.methods.credit = async function (
 ): Promise<ILeaveBalance> {
     this.used = Math.max(0, this.used - days)
 
-    if (reason && this.notes) {
-        this.notes = `${this.notes}\n${new Date().toISOString()}: Credited ${days} days - ${reason}`
-    } else if (reason) {
-        this.notes = `${new Date().toISOString()}: Credited ${days} days - ${reason}`
+    const newNote = `${new Date().toISOString()}: Credited ${days} days - ${reason}`
+    
+    if (this.notes) {
+        // Check if adding new note would exceed limit
+        const combinedNotes = `${this.notes}\n${newNote}`
+        if (combinedNotes.length <= 2000) {
+            this.notes = combinedNotes
+        } else {
+            // Truncate old notes to make room for new one
+            const maxOldLength = 2000 - newNote.length - 1 // -1 for newline
+            const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
+            this.notes = `${truncatedOld}\n${newNote}`
+        }
+    } else {
+        this.notes = newNote
     }
 
     return await this.save()
@@ -217,10 +240,21 @@ LeaveBalanceSchema.methods.updateAccrual = async function (
         this.accrued = newAccrual
         this.lastAccrualAt = effectiveDate
 
+        const newNote = `${effectiveDate.toISOString()}: Accrued to ${newAccrual} days (${monthsWorked} months from contract start)`
+        
         if (this.notes) {
-            this.notes = `${this.notes}\n${effectiveDate.toISOString()}: Accrued to ${newAccrual} days (${monthsWorked} months from contract start)`
+            // Check if adding new note would exceed limit
+            const combinedNotes = `${this.notes}\n${newNote}`
+            if (combinedNotes.length <= 2000) {
+                this.notes = combinedNotes
+            } else {
+                // Truncate old notes to make room for new one
+                const maxOldLength = 2000 - newNote.length - 1 // -1 for newline
+                const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
+                this.notes = `${truncatedOld}\n${newNote}`
+            }
         } else {
-            this.notes = `${effectiveDate.toISOString()}: Accrued to ${newAccrual} days (${monthsWorked} months from contract start)`
+            this.notes = newNote
         }
 
         return await this.save()

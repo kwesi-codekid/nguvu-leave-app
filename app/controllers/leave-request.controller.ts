@@ -8,6 +8,7 @@ import Department from "../models/department.model"
 import LeaveBalance from "../models/leave-balance.model"
 import Holiday from "../models/holiday.model"
 import AuditLogController from "./audit-log.controller"
+import NotificationController from "./notification.controller"
 import SMSService from "../services/sms.service"
 import {
     successResponseObject,
@@ -455,6 +456,24 @@ export class LeaveRequestController {
                 }
             } else {
                 console.log('[LeaveRequest] Position has no endorser configured')
+            }
+
+            // Send in-app notification
+            try {
+                const startDateFormatted = new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                const endDateFormatted = new Date(actualEndDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+                await NotificationController.notifyLeaveSubmitted({
+                    staffId: user._id,
+                    staffName: staff.name,
+                    leaveRequestId: leaveRequest[0]._id.toString(),
+                    leaveType,
+                    startDate: startDateFormatted,
+                    endDate: endDateFormatted,
+                    departmentId: department._id.toString(),
+                })
+            } catch (notifError) {
+                console.error('[LeaveRequest] Failed to send notification:', notifError)
             }
 
             return successResponseObject(
@@ -1078,8 +1097,34 @@ export class LeaveRequestController {
                 console.error('Failed to send SMS notification:', smsError)
             }
 
+            // Send in-app notifications
+            try {
+                const startDateFormatted = new Date(request.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                const endDateFormatted = new Date(request.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+                if (wasAutoApproved) {
+                    await NotificationController.notifyLeaveApproved({
+                        staffId: (request.staff as any)._id.toString(),
+                        leaveRequestId: id,
+                        leaveType: request.leaveType,
+                        startDate: startDateFormatted,
+                        endDate: endDateFormatted,
+                        approvedBy: user.name,
+                    })
+                } else {
+                    await NotificationController.notifyLeaveEndorsed({
+                        staffId: (request.staff as any)._id.toString(),
+                        leaveRequestId: id,
+                        leaveType: request.leaveType,
+                        endorsedBy: user.name,
+                    })
+                }
+            } catch (notifError) {
+                console.error('Failed to send in-app notification:', notifError)
+            }
+
             return successResponseObject(
-                wasAutoApproved 
+                wasAutoApproved
                     ? "Leave request approved successfully (single-level approval)"
                     : "Leave request endorsed successfully",
                 endorsedRequest
@@ -1206,6 +1251,19 @@ export class LeaveRequestController {
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
             })
+
+            // Send in-app notification
+            try {
+                await NotificationController.notifyLeaveRejected({
+                    staffId: (request.staff as any)._id.toString(),
+                    leaveRequestId: id,
+                    leaveType: request.leaveType,
+                    rejectedBy: user.name,
+                    reason: reason.trim(),
+                })
+            } catch (notifError) {
+                console.error('Failed to send in-app notification:', notifError)
+            }
 
             return successResponseObject(
                 "Leave request rejected by endorser",
@@ -1358,6 +1416,23 @@ export class LeaveRequestController {
                 console.error('[ApproveRequest] Failed to send SMS notification:', smsError)
             }
 
+            // Send in-app notification
+            try {
+                const startDateFormatted = new Date(request.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                const endDateFormatted = new Date(request.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+                await NotificationController.notifyLeaveApproved({
+                    staffId: (request.staff as any)._id.toString(),
+                    leaveRequestId: id,
+                    leaveType: request.leaveType,
+                    startDate: startDateFormatted,
+                    endDate: endDateFormatted,
+                    approvedBy: user.name,
+                })
+            } catch (notifError) {
+                console.error('Failed to send in-app notification:', notifError)
+            }
+
             return successResponseObject(
                 "Leave request approved successfully",
                 approvedRequest
@@ -1483,6 +1558,19 @@ export class LeaveRequestController {
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
             })
+
+            // Send in-app notification
+            try {
+                await NotificationController.notifyLeaveRejected({
+                    staffId: (request.staff as any)._id.toString(),
+                    leaveRequestId: id,
+                    leaveType: request.leaveType,
+                    rejectedBy: user.name,
+                    reason: reason.trim(),
+                })
+            } catch (notifError) {
+                console.error('Failed to send in-app notification:', notifError)
+            }
 
             return successResponseObject(
                 "Leave request rejected by approver",

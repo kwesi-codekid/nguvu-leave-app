@@ -267,7 +267,7 @@ export default function AuditLogs() {
     }
 
     return (
-        <AppLayout user={sessionData.user}>
+        <AppLayout user={sessionData.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className="p-6">
                 {/* Header */}
                 <div className="mb-6">

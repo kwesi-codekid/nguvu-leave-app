@@ -70,7 +70,7 @@ export const navlinks: {
     {
         label: "Holidays",
         icon: <CalendarCheck className='w-5 h-5' />,
-        permittedRoles: ["STAFF", "MANAGER", "HR", "ADMIN"],
+        permittedRoles: ["MANAGER", "HR", "ADMIN"],
         href: "/holidays",
     },
     {

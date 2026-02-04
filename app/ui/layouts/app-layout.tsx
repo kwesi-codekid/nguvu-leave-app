@@ -14,11 +14,14 @@ import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react"
 import { navlinks } from "../lib/navlinks"
 import { AuthUserDropdown } from "../components/dropdowns"
 import { ThemeSwitcher } from "../components/theme-switcher"
+import { NotificationDropdown } from "../components/notification-dropdown"
 
 export default function AppLayout({
     children,
     user,
     pageLoading,
+    baseUrl,
+    token,
 }: {
     children: React.ReactNode
     user?: {
@@ -29,6 +32,8 @@ export default function AppLayout({
         permissions: string[]
     }
     pageLoading?: boolean
+    baseUrl?: string
+    token?: string
 }) {
     // Use a state variable to track the collapsed state, initializing it from localStorage
     const [isCollapsed, setIsCollapsed] = useState(() => {
@@ -289,6 +294,9 @@ export default function AppLayout({
                         </div>
 
                         <div className='flex items-center gap-3'>
+                            {baseUrl && token && (
+                                <NotificationDropdown baseUrl={baseUrl} token={token} />
+                            )}
                             <ThemeSwitcher />
                             {user && <AuthUserDropdown user={user} />}
                         </div>

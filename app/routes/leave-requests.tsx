@@ -607,7 +607,7 @@ export default function LeaveRequests() {
     )
 
     return (
-        <AppLayout user={sessionData?.user}>
+        <AppLayout user={sessionData?.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-6 pb-8'>
                 {/* Header */}
                 <div className='flex justify-between items-start'>

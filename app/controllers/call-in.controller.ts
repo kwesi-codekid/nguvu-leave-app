@@ -8,6 +8,7 @@ import Department from "../models/department.model"
 import StaffContract from "../models/staff-contract.model"
 import Holiday from "../models/holiday.model"
 import AuditLogController from "./audit-log.controller"
+import NotificationController from "./notification.controller"
 import SMSService from "../services/sms.service"
 import {
     successResponseObject,
@@ -274,6 +275,23 @@ export class CallInController {
                     smsError
                 )
                 // Don't fail the call-in creation if SMS fails
+            }
+
+            // Send in-app notification
+            try {
+                const callInDateFormatted = new Date(callStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+                await NotificationController.notifyCallIn({
+                    staffId: (leaveRequest.staff as any)._id.toString(),
+                    staffName: (leaveRequest.staff as any).name,
+                    callInId: populatedCallIn._id.toString(),
+                    reason: reason.trim(),
+                    callInDate: callInDateFormatted,
+                    requestedBy: user.name,
+                    departmentId: (leaveRequest.department as any)._id.toString(),
+                })
+            } catch (notifError) {
+                console.error('[CallIn] Failed to send in-app notification:', notifError)
             }
 
             return successResponseObject(
@@ -2666,6 +2684,8 @@ export class CallInController {
         try {
             const user = (req as any).user
 
+            console.log("[getStaffOnLeave] User:", user?.name, "Permissions:", user?.permissions)
+
             // Check permissions
             const canView =
                 user?.permissions?.includes("HR") ||
@@ -2673,22 +2693,36 @@ export class CallInController {
                 user?.permissions?.includes("MANAGER")
 
             if (!canView) {
+                console.log("[getStaffOnLeave] User not authorized")
                 return errorResponseObject("Unauthorized to view staff on leave")
             }
 
             const today = new Date()
             today.setHours(0, 0, 0, 0)
+            console.log("[getStaffOnLeave] Today (midnight):", today.toISOString())
 
             // Find approved leave requests where today is within the leave period
-            const onLeaveRequests = await LeaveRequest.find({
+            const query = {
                 status: LeaveStatus.APPROVED,
                 startDate: { $lte: today },
                 endDate: { $gte: today },
-            })
+            }
+            console.log("[getStaffOnLeave] Query:", JSON.stringify(query, null, 2))
+
+            const onLeaveRequests = await LeaveRequest.find(query)
                 .populate("staff", "name staffId email department")
                 .populate("department", "name")
                 .sort({ startDate: 1 })
                 .lean()
+
+            console.log("[getStaffOnLeave] Found onLeaveRequests:", onLeaveRequests.length)
+
+            // Also check all approved requests to see what's there
+            const allApproved = await LeaveRequest.find({ status: LeaveStatus.APPROVED })
+                .select("staff startDate endDate status leaveType")
+                .lean()
+            console.log("[getStaffOnLeave] All approved requests:", allApproved.length)
+            console.log("[getStaffOnLeave] All approved:", JSON.stringify(allApproved, null, 2))
 
             // Calculate days remaining for each leave
             const staffOnLeave = onLeaveRequests.map((leave: any) => {
@@ -2709,6 +2743,8 @@ export class CallInController {
                     daysRemaining,
                 }
             })
+
+            console.log("[getStaffOnLeave] Staff on leave processed:", staffOnLeave.length)
 
             return successResponseObject("Staff on leave retrieved successfully", {
                 staffOnLeave,

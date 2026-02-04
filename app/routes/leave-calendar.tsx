@@ -135,8 +135,27 @@ export default function LeaveCalendar() {
     const generateCalendarDays = () => {
         const startOfMonth = currentMonth.startOf("month")
         const endOfMonth = currentMonth.endOf("month")
-        const startOfWeek = startOfMonth.startOf("week")
-        const endOfWeek = endOfMonth.endOf("week")
+        
+        // Calculate week boundaries with Sunday as start
+        // In Luxon: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
+        const startOfMonthWeekday = startOfMonth.weekday
+        const daysFromSunday = startOfMonthWeekday === 7 ? 0 : startOfMonthWeekday
+        const startOfWeek = startOfMonth.minus({ days: daysFromSunday })
+        
+        const endOfMonthWeekday = endOfMonth.weekday
+        const daysToSaturday = endOfMonthWeekday === 7 ? 6 : 6 - endOfMonthWeekday
+        const endOfWeek = endOfMonth.plus({ days: daysToSaturday })
+
+        console.log("Calendar debug:", {
+            currentMonth: currentMonth.toFormat("yyyy-MM-dd"),
+            startOfMonth: startOfMonth.toFormat("yyyy-MM-dd"),
+            endOfMonth: endOfMonth.toFormat("yyyy-MM-dd"),
+            startOfWeek: startOfWeek.toFormat("yyyy-MM-dd"),
+            endOfWeek: endOfWeek.toFormat("yyyy-MM-dd"),
+            startOfMonthWeekday: startOfMonthWeekday,
+            startOfWeekDay: startOfWeek.weekday,
+            startOfWeekDayName: startOfWeek.toFormat("EEEE"),
+        })
 
         const days = []
         let current = startOfWeek
@@ -150,7 +169,7 @@ export default function LeaveCalendar() {
                 isSelected: selectedDate ? current.hasSame(selectedDate, "day") : false,
                 isHoliday: !!holiday,
                 holiday: holiday,
-                events: filteredEvents.filter((event: any) => {
+                events: holiday ? [] : filteredEvents.filter((event: any) => {
                     const eventDate = DateTime.fromISO(event.start).toFormat(
                         "yyyy-MM-dd"
                     )
@@ -159,6 +178,12 @@ export default function LeaveCalendar() {
             })
             current = current.plus({ days: 1 })
         }
+
+        console.log("Generated days:", days.map(d => ({
+            date: d.date.toFormat("yyyy-MM-dd EEE"),
+            isCurrentMonth: d.isCurrentMonth,
+            weekday: d.date.weekday
+        })))
 
         return days
     }
@@ -182,11 +207,13 @@ export default function LeaveCalendar() {
     // Get events for selected date
     const selectedDateEvents = useMemo(() => {
         if (!selectedDate) return []
+        const holiday = getHolidayForDate(selectedDate)
+        if (holiday) return [] // Don't show events on holidays
         return filteredEvents.filter((event: any) => {
             const eventDate = DateTime.fromISO(event.start).toFormat("yyyy-MM-dd")
             return eventDate === selectedDate.toFormat("yyyy-MM-dd")
         })
-    }, [filteredEvents, selectedDate])
+    }, [filteredEvents, selectedDate, holidays])
 
     // Get holiday for selected date
     const selectedDateHoliday = useMemo(() => {
@@ -226,7 +253,7 @@ export default function LeaveCalendar() {
     }, [filteredEvents])
 
     return (
-        <AppLayout user={sessionData.user}>
+        <AppLayout user={sessionData.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className="p-6">
                 {/* Header */}
                 <div className="flex items-center justify-between mb-6">

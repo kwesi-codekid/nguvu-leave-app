@@ -294,7 +294,7 @@ export default function Reports() {
 
     if (!canViewReports) {
         return (
-            <AppLayout user={sessionData?.user}>
+            <AppLayout user={sessionData?.user} baseUrl={baseUrl} token={sessionData?.token}>
                 <div className="flex flex-col items-center justify-center py-20">
                     <AlertTriangle className="size-12 text-warning-500 mb-4" />
                     <h2 className="text-xl font-semibold">Access Denied</h2>
@@ -305,7 +305,7 @@ export default function Reports() {
     }
 
     return (
-        <AppLayout user={sessionData?.user}>
+        <AppLayout user={sessionData?.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className="p-6 space-y-6">
                 {/* Header */}
                 <div className="flex items-center justify-between">
