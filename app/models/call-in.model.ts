@@ -145,30 +145,21 @@ callInSchema.pre("validate", async function () {
     }
 })
 
-// Validation: Only department heads can create call-ins
+// Validation: Only authorized staff (department heads, HR, Admin) can create call-ins
+// Note: The controller already performs thorough permission checks before saving.
+// This hook validates the requesting staff exists but defers permission logic to the controller
 callInSchema.pre("validate", async function () {
     const doc = this as any
-    if (!doc.requestedBy || !doc.department) return
+    if (!doc.requestedBy || !doc.department || !doc.isNew) return
 
-    const Department = mongoose.model("Department")
-    const department = await Department.findById(doc.department)
-    if (!department) {
-        throw new Error("Department not found")
+    const Staff = mongoose.model("Staff")
+    const requestingStaff = await Staff.findById(doc.requestedBy)
+    if (!requestingStaff) {
+        throw new Error("Requesting staff not found")
     }
 
-    // Check if the requesting user is the department head
-    if (department.head?.toString() !== doc.requestedBy.toString()) {
-        // If not department head, check if they have a manager/supervisor role
-        const Staff = mongoose.model("Staff")
-        const requestingStaff = await Staff.findById(doc.requestedBy)
-        if (!requestingStaff) {
-            throw new Error("Requesting staff not found")
-        }
-
-        // You can add additional permission checks here based on your requirements
-        // For now, we'll only allow department heads
-        throw new Error("Only department heads can create call-ins")
-    }
+    // Permission checks are handled by the controller
+    // The controller validates HR/Admin/Department head permissions before reaching here
 })
 
 // Method: Calculate working days in call-in period
@@ -327,9 +318,12 @@ callInSchema.methods.processCallIn = async function (): Promise<void> {
     }
 }
 
-// Hook: Calculate working days before saving
+// Hook: Calculate working days before saving and track if new
 callInSchema.pre("save", async function () {
     const doc = this as any
+    // Track if this is a new document (isNew becomes false after save)
+    doc._wasNew = doc.isNew
+
     if (doc.isNew) {
         // Calculate working days if not provided
         if (!doc.workingDaysRecovered) {
@@ -342,7 +336,7 @@ callInSchema.pre("save", async function () {
 callInSchema.post("save", async function (doc) {
     const callInDoc = doc as any
     // Only process for new call-ins
-    if (callInDoc.wasNew) {
+    if (callInDoc._wasNew) {
         try {
             await callInDoc.processCallIn()
         } catch (error) {

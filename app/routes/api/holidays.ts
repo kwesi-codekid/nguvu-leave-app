@@ -89,22 +89,36 @@ export async function loader({ request }: LoaderFunctionArgs) {
             case "year": {
                 // Get holidays for a specific year
                 const year = url.searchParams.get("year")
-                
+
                 if (!year) {
                     return validationErrorResponse("Validation failed", [
                         { field: "year", message: "Year is required when using op=year" }
                     ])
                 }
-                
+
                 const result = await HolidayController.getHolidaysForYear(req, year)
-                
+
                 if (result.status !== "success") {
                     if (result.errors) {
                         return validationErrorResponse(result.message, result.errors)
                     }
                     return errorResponse(result.message, null, 400)
                 }
-                
+
+                return successResponse(result.message, result.data)
+            }
+
+            case "range": {
+                // Get holidays in a date range
+                const result = await HolidayController.getHolidaysInRange(req)
+
+                if (result.status !== "success") {
+                    if (result.errors) {
+                        return validationErrorResponse(result.message, result.errors)
+                    }
+                    return errorResponse(result.message, null, 400)
+                }
+
                 return successResponse(result.message, result.data)
             }
 

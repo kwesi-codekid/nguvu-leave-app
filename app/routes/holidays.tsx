@@ -907,7 +907,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // check if user is authenticated
     const authenticated = await isAuthenticated(request)
     if (!authenticated) {
-        return redirect("/login-email")
+        return redirect("/")
     }
     const sessionData = await getSessionData(request)
     const baseUrl = process.env.BASE_URL as string

@@ -520,6 +520,49 @@ export class HolidayController {
     }
 
     /**
+     * Get holidays in a date range
+     * GET /api/holidays?op=range&startDate=...&endDate=...
+     */
+    static async getHolidaysInRange(req: Request): Promise<ResponseObject> {
+        try {
+            const { startDate, endDate } = req.query
+
+            if (!startDate || !endDate) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "dates", message: "Start date and end date are required" },
+                ])
+            }
+
+            const start = new Date(startDate as string)
+            const end = new Date(endDate as string)
+
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "dates", message: "Invalid date format" },
+                ])
+            }
+
+            const holidays = await Holiday.getHolidaysInRange(start, end)
+
+            // Populate creator details
+            const populatedHolidays = await Holiday.populate(holidays, {
+                path: "createdBy",
+                select: "name email",
+            })
+
+            return successResponseObject("Holidays in range retrieved successfully", {
+                startDate: start.toISOString().split("T")[0],
+                endDate: end.toISOString().split("T")[0],
+                totalHolidays: populatedHolidays.length,
+                holidays: populatedHolidays,
+            })
+        } catch (error) {
+            console.error("Error fetching holidays in range:", error)
+            return errorResponseObject("Failed to retrieve holidays in range")
+        }
+    }
+
+    /**
      * Check if a specific date is a holiday
      * GET /api/holidays/check-date
      */

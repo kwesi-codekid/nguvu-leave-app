@@ -24,6 +24,9 @@ import {
     Textarea,
     Tooltip,
     useDisclosure,
+    Popover,
+    PopoverTrigger,
+    PopoverContent,
 } from "@heroui/react"
 import { useState, useEffect } from "react"
 import axios from "axios"
@@ -47,6 +50,8 @@ import {
     ArrowLeftFromLine,
     Clock,
     FileText,
+    Trash2,
+    AlertTriangle,
 } from "lucide-react"
 import { MobileList } from "~/ui/components/lists"
 import { LeaveTypeChip, LeaveStatusChip } from "~/ui/components/chips"
@@ -67,10 +72,18 @@ export default function CallIns() {
         data: callInsData,
         isLoading,
         mutate,
+        error: callInsError,
     } = useSWR(
         `${baseUrl}/call-ins`,
         fetcher(sessionData.token as string)
     )
+
+    // Debug: Log call-ins data
+    console.log("[CallIns] Full response:", callInsData)
+    console.log("[CallIns] Data object:", callInsData?.data)
+    console.log("[CallIns] CallIns array:", callInsData?.data?.callIns)
+    console.log("[CallIns] Error:", callInsError)
+    console.log("[CallIns] Is loading:", isLoading)
 
     // Fetch approved leaves on leave (for creating call-ins)
     const { data: onLeaveData, isLoading: onLeaveLoading } = useSWR(
@@ -100,6 +113,8 @@ export default function CallIns() {
     const [calculatedDays, setCalculatedDays] = useState<number | null>(null)
     const [isCalculating, setIsCalculating] = useState(false)
     const [isSubmitting, setIsSubmitting] = useState(false)
+    const [isDeleting, setIsDeleting] = useState(false)
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
     // Calculate recovered days when dates change
     useEffect(() => {
@@ -171,16 +186,19 @@ export default function CallIns() {
             return
         }
 
+        const payload = {
+            leaveRequestId: formData.leaveRequestId,
+            callInStartDate: formData.callInStartDate,
+            callInEndDate: formData.callInEndDate || formData.callInStartDate,
+            reason: formData.reason,
+        }
+        console.log("Creating call-in with payload:", payload)
+
         setIsSubmitting(true)
         try {
             await axios.post(
                 `${baseUrl}/call-ins`,
-                {
-                    leaveRequestId: formData.leaveRequestId,
-                    callInStartDate: formData.callInStartDate,
-                    callInEndDate: formData.callInEndDate || formData.callInStartDate,
-                    reason: formData.reason,
-                },
+                payload,
                 {
                     headers: {
                         Authorization: `Bearer ${sessionData?.token}`,
@@ -207,11 +225,21 @@ export default function CallIns() {
             })
         } catch (error: any) {
             console.error("Error creating call-in:", error)
+            console.error("Error response:", error.response?.data)
+
+            // Get detailed error message
+            let errorMessage = "Failed to create call-in"
+            if (error.response?.data?.errors?.length > 0) {
+                // Show first validation error
+                errorMessage = error.response.data.errors[0].message
+            } else if (error.response?.data?.message) {
+                errorMessage = error.response.data.message
+            }
+
             addToast({
                 color: "danger",
                 title: "Error",
-                description:
-                    error.response?.data?.message || "Failed to create call-in",
+                description: errorMessage,
             })
         } finally {
             setIsSubmitting(false)
@@ -222,6 +250,58 @@ export default function CallIns() {
     const handleViewCallIn = (callIn: any) => {
         setSelectedCallIn(callIn)
         viewDisclosure.onOpen()
+    }
+
+    // Handle delete call-in
+    const handleDeleteCallIn = async (onClose: () => void) => {
+        if (!selectedCallIn) return
+
+        setIsDeleting(true)
+        try {
+            await axios.delete(
+                `${baseUrl}/call-ins/${selectedCallIn._id}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${sessionData?.token}`,
+                    },
+                }
+            )
+
+            await mutate()
+            setShowDeleteConfirm(false)
+            onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Call-in cancelled successfully. Balance has been adjusted.",
+            })
+        } catch (error: any) {
+            console.error("Error deleting call-in:", error)
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to cancel call-in",
+            })
+        } finally {
+            setIsDeleting(false)
+        }
+    }
+
+    // Check if call-in can be deleted (within 48 hours)
+    const canDeleteCallIn = (callIn: any) => {
+        if (!callIn) return false
+
+        // Check if user is creator, HR or Admin
+        const isCreator = callIn.requestedBy?._id === sessionData?.user?._id
+        if (!isCreator && !isHrOrAdmin) return false
+
+        // Check if within 48 hours
+        const createdAt = new Date(callIn.createdAt)
+        const now = new Date()
+        const hoursSinceCreation = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60)
+
+        return hoursSinceCreation <= 48
     }
 
     return (
@@ -273,6 +353,17 @@ export default function CallIns() {
                     <div className='flex items-center justify-between'>
                         <SearchInput />
                     </div>
+
+                    {/* Error State */}
+                    {callInsError && (
+                        <Card className='border border-danger-200 dark:border-danger-800 bg-danger-50 dark:bg-danger-900/10'>
+                            <CardBody className='p-4'>
+                                <p className='text-danger-600 dark:text-danger-400'>
+                                    Error loading call-ins: {callInsError.message || 'Unknown error'}
+                                </p>
+                            </CardBody>
+                        </Card>
+                    )}
 
                     {/* Desktop Table */}
                     <DataTable
@@ -588,12 +679,16 @@ export default function CallIns() {
                                             label='Reason for Call-In'
                                             variant='bordered'
                                             labelPlacement='outside'
-                                            placeholder='Explain why the staff needs to return early'
+                                            placeholder='Explain why the staff needs to return early (minimum 10 characters)'
                                             isRequired
+                                            minLength={10}
                                             value={formData.reason}
                                             onValueChange={(value) =>
                                                 setFormData({ ...formData, reason: value })
                                             }
+                                            description={`${formData.reason.length}/10 characters minimum`}
+                                            isInvalid={formData.reason.length > 0 && formData.reason.length < 10}
+                                            errorMessage={formData.reason.length > 0 && formData.reason.length < 10 ? "Reason must be at least 10 characters" : ""}
                                             classNames={{
                                                 inputWrapper:
                                                     "border-zinc-200 dark:border-zinc-800",
@@ -619,6 +714,7 @@ export default function CallIns() {
                                         !formData.leaveRequestId ||
                                         !formData.callInStartDate ||
                                         !formData.reason.trim() ||
+                                        formData.reason.trim().length < 10 ||
                                         calculatedDays === null ||
                                         calculatedDays === 0
                                     }
@@ -789,7 +885,56 @@ export default function CallIns() {
                                     </>
                                 )}
                             </DrawerBody>
-                            <DrawerFooter className='border-t border-zinc-200 dark:border-zinc-800'>
+                            <DrawerFooter className='border-t border-zinc-200 dark:border-zinc-800 justify-between'>
+                                <div>
+                                    {canDeleteCallIn(selectedCallIn) && (
+                                        <Popover
+                                            isOpen={showDeleteConfirm}
+                                            onOpenChange={setShowDeleteConfirm}
+                                            placement='top'
+                                        >
+                                            <PopoverTrigger>
+                                                <Button
+                                                    color='danger'
+                                                    variant='flat'
+                                                    startContent={<Trash2 className='size-4' />}
+                                                    isLoading={isDeleting}
+                                                >
+                                                    Cancel Call-In
+                                                </Button>
+                                            </PopoverTrigger>
+                                            <PopoverContent className='p-4 max-w-xs'>
+                                                <div className='flex flex-col gap-3'>
+                                                    <div className='flex items-center gap-2 text-warning-600'>
+                                                        <AlertTriangle className='size-5' />
+                                                        <span className='font-semibold'>Confirm Cancellation</span>
+                                                    </div>
+                                                    <p className='text-sm text-zinc-600 dark:text-zinc-400'>
+                                                        This will cancel the call-in and debit{" "}
+                                                        <strong>{selectedCallIn?.workingDaysRecovered} days</strong> back from the staff's leave balance.
+                                                    </p>
+                                                    <div className='flex gap-2 justify-end'>
+                                                        <Button
+                                                            size='sm'
+                                                            variant='flat'
+                                                            onPress={() => setShowDeleteConfirm(false)}
+                                                        >
+                                                            No, Keep It
+                                                        </Button>
+                                                        <Button
+                                                            size='sm'
+                                                            color='danger'
+                                                            isLoading={isDeleting}
+                                                            onPress={() => handleDeleteCallIn(onClose)}
+                                                        >
+                                                            Yes, Cancel
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            </PopoverContent>
+                                        </Popover>
+                                    )}
+                                </div>
                                 <Button
                                     color='default'
                                     variant='flat'
@@ -809,7 +954,7 @@ export default function CallIns() {
 export async function loader({ request }: LoaderFunctionArgs) {
     const authenticated = await isAuthenticated(request)
     if (!authenticated) {
-        return redirect("/login-email")
+        return redirect("/")
     }
     const sessionData = await getSessionData(request)
     const baseUrl = process.env.BASE_URL as string

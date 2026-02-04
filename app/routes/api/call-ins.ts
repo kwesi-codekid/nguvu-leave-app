@@ -250,7 +250,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
             default: {
                 // Default: Get all call-ins
+                console.log("[CallIns API] Getting all call-ins for user:", user?.name, "Permissions:", user?.permissions)
                 const result = await CallInController.getAllCallIns(req)
+                console.log("[CallIns API] Result status:", result.status)
+                console.log("[CallIns API] Result message:", result.message)
+                console.log("[CallIns API] CallIns count:", result.data?.callIns?.length || 0)
                 return result.status === "success"
                     ? successResponse(result.message, result.data)
                     : errorResponse(result.message, null, 500)
@@ -367,8 +371,10 @@ export async function action({ request }: ActionFunctionArgs) {
 
             default: {
                 // Default POST - create single call-in with automatic notification
+                console.log("[CallIn API] Creating call-in with body:", body)
+                console.log("[CallIn API] User:", user?.name, "Permissions:", user?.permissions)
+
                 // Check if user can create call-ins (Manager for dept, HR/Admin for any)
-                const isDepartmentHead = false // Will be checked in controller
                 const hasPermission =
                     user?.permissions?.includes("HR") ||
                     user?.permissions?.includes("ADMIN") ||
@@ -383,6 +389,7 @@ export async function action({ request }: ActionFunctionArgs) {
                 }
 
                 const result = await CallInController.createCallIn(req)
+                console.log("[CallIn API] Controller result:", result.status, result.message, result.errors)
 
                 if (result.status !== "success") {
                     if (result.errors) {

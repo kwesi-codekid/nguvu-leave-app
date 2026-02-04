@@ -110,16 +110,17 @@ HolidaySchema.statics.getHolidaysForYear = async function (year: number): Promis
     const fixedHolidays = await this.find({ type: HolidayTypes.FIXED }).lean()
     holidays.push(...fixedHolidays)
 
-    // Get varying holidays for the specific year
-    const yearStart = new Date(year, 0, 1)
-    const yearEnd = new Date(year, 11, 31, 23, 59, 59, 999)
+    // Get varying holidays for the specific year (use UTC boundaries)
+    const yearStart = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0))
+    const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999))
 
     const varyingHolidays = await this.find({
         type: HolidayTypes.VARYING,
-        startDate: {
-            $gte: yearStart,
-            $lte: yearEnd,
-        },
+        $or: [
+            { startDate: { $gte: yearStart, $lte: yearEnd } },
+            { endDate: { $gte: yearStart, $lte: yearEnd } },
+            { startDate: { $lte: yearStart }, endDate: { $gte: yearEnd } },
+        ],
     }).lean()
 
     holidays.push(...varyingHolidays)
@@ -134,13 +135,27 @@ HolidaySchema.statics.getHolidaysInRange = async function (
 ): Promise<IHoliday[]> {
     const holidays: IHoliday[] = []
 
+    // Normalize range to UTC day boundaries
+    const rangeStartUTC = new Date(Date.UTC(
+        rangeStart.getFullYear(),
+        rangeStart.getMonth(),
+        rangeStart.getDate(),
+        0, 0, 0, 0
+    ))
+    const rangeEndUTC = new Date(Date.UTC(
+        rangeEnd.getFullYear(),
+        rangeEnd.getMonth(),
+        rangeEnd.getDate(),
+        23, 59, 59, 999
+    ))
+
     // Get varying holidays that overlap with the range
     const varyingHolidays = await this.find({
         type: HolidayTypes.VARYING,
         $or: [
-            { startDate: { $gte: rangeStart, $lte: rangeEnd } },
-            { endDate: { $gte: rangeStart, $lte: rangeEnd } },
-            { startDate: { $lte: rangeStart }, endDate: { $gte: rangeEnd } },
+            { startDate: { $gte: rangeStartUTC, $lte: rangeEndUTC } },
+            { endDate: { $gte: rangeStartUTC, $lte: rangeEndUTC } },
+            { startDate: { $lte: rangeStartUTC }, endDate: { $gte: rangeEndUTC } },
         ],
     }).lean()
 
@@ -155,11 +170,13 @@ HolidaySchema.statics.getHolidaysInRange = async function (
 
     for (let year = startYear; year <= endYear; year++) {
         for (const holiday of fixedHolidays) {
-            const startMonth = new Date(holiday.startDate).getMonth()
-            const startDay = new Date(holiday.startDate).getDate()
-            const holidayStart = new Date(year, startMonth, startDay)
+            // Use UTC methods for consistent date extraction
+            const holidayStartDate = new Date(holiday.startDate)
+            const startMonth = holidayStartDate.getUTCMonth()
+            const startDay = holidayStartDate.getUTCDate()
+            const holidayStart = new Date(Date.UTC(year, startMonth, startDay))
 
-            if (holidayStart >= rangeStart && holidayStart <= rangeEnd) {
+            if (holidayStart >= rangeStartUTC && holidayStart <= rangeEndUTC) {
                 holidays.push(holiday)
             }
         }
@@ -170,13 +187,20 @@ HolidaySchema.statics.getHolidaysInRange = async function (
 
 // Static method to check if a specific date is a holiday
 HolidaySchema.statics.isHoliday = async function (date: Date): Promise<boolean> {
-    const checkDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+    // Extract date components in local time
+    const checkYear = date.getFullYear()
+    const checkMonth = date.getMonth()
+    const checkDay = date.getDate()
 
-    // Check varying holidays
+    // Create start and end of day in UTC for database comparison
+    const dayStart = new Date(Date.UTC(checkYear, checkMonth, checkDay, 0, 0, 0, 0))
+    const dayEnd = new Date(Date.UTC(checkYear, checkMonth, checkDay, 23, 59, 59, 999))
+
+    // Check varying holidays - use date range overlap
     const varyingHoliday = await this.findOne({
         type: HolidayTypes.VARYING,
-        startDate: { $lte: checkDate },
-        endDate: { $gte: checkDate },
+        startDate: { $lte: dayEnd },
+        endDate: { $gte: dayStart },
     })
 
     if (varyingHoliday) {
@@ -187,13 +211,14 @@ HolidaySchema.statics.isHoliday = async function (date: Date): Promise<boolean> 
     const fixedHolidays = await this.find({ type: HolidayTypes.FIXED })
 
     for (const holiday of fixedHolidays) {
-        const startMonth = new Date(holiday.startDate).getMonth()
-        const startDay = new Date(holiday.startDate).getDate()
-        const endMonth = new Date(holiday.endDate).getMonth()
-        const endDay = new Date(holiday.endDate).getDate()
+        // Use UTC methods to get consistent date parts regardless of timezone
+        const holidayStartDate = new Date(holiday.startDate)
+        const holidayEndDate = new Date(holiday.endDate)
 
-        const checkMonth = checkDate.getMonth()
-        const checkDay = checkDate.getDate()
+        const startMonth = holidayStartDate.getUTCMonth()
+        const startDay = holidayStartDate.getUTCDate()
+        const endMonth = holidayEndDate.getUTCMonth()
+        const endDay = holidayEndDate.getUTCDate()
 
         // Simple check for single day or same month range
         if (startMonth === endMonth) {

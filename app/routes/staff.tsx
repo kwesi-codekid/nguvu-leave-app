@@ -89,13 +89,19 @@ export default function Staff() {
 
     const { data, isLoading, error, mutate } = useSWR(
         `${baseUrl}/staff?search=${search}&limit=${limit}&page=${page}`,
-        fetcher(sessionData?.token as string)
+        fetcher(sessionData?.token as string),
+        {
+            refreshInterval: 0
+        }
     )
 
     // Fetch departments for dropdown
     const { data: departmentsData } = useSWR(
         `${baseUrl}/departments`,
-        fetcher(sessionData?.token as string)
+        fetcher(sessionData?.token as string),
+        {
+            refreshInterval: 0
+        }
     )
 
     const createDisclosure = useDisclosure()
@@ -356,6 +362,7 @@ export default function Staff() {
                             size='sm'
                             color='warning'
                             onPress={createDisclosure.onOpen}
+                            className='bg-warning/70 dark:bg-warning/70 text-white hover:shadow-lg hover:scale-[1.01] transition-all duration-300'
                         >
                             Add Staff
                         </Button>
@@ -1358,7 +1365,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const sessionData = await getSessionData(request)
 
     if (!authenticated) {
-        return redirect("/login-email")
+        return redirect("/")
     }
 
     const baseUrl = process.env.BASE_URL

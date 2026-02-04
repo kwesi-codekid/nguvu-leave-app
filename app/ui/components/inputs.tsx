@@ -49,25 +49,47 @@ export const PasswordInput = (props: InputProps) => {
 export const SearchInput = (props: InputProps) => {
     const [search, setSearch] = useState("")
     const navigate = useNavigate()
+    
+    // Initialize search from URL on mount
     useEffect(() => {
-        // debounce for 2 seconds
+        const urlParams = new URLSearchParams(window.location.search)
+        const initialSearch = urlParams.get("search") || ""
+        setSearch(initialSearch)
+    }, [])
+    
+    useEffect(() => {
+        // debounce for 1 second
         const timeout = setTimeout(() => {
-            navigate(`?search=${search}`, {
-                replace: true,
-            })
+            const urlParams = new URLSearchParams(window.location.search)
+            const currentSearch = urlParams.get("search") || ""
+            
+            // Only navigate if search actually changed
+            if (search !== currentSearch) {
+                if (search) {
+                    navigate(`?search=${encodeURIComponent(search)}`, {
+                        replace: true,
+                    })
+                } else {
+                    // Remove search param if empty
+                    urlParams.delete("search")
+                    navigate(`${urlParams.toString() ? `?${urlParams.toString()}` : ""}`, {
+                        replace: true,
+                    })
+                }
+            }
         }, 1000)
         return () => clearTimeout(timeout)
-    }, [search])
+    }, [search, navigate])
+    
     return (
         <Input
-            // size='sm
             variant='bordered'
             className='max-w-[15rem]'
             classNames={{
                 inputWrapper: "border-zinc-200 dark:border-zinc-800",
                 input: "focus-visible:outline-none",
             }}
-            placeholder='Search departments'
+            placeholder='Search staff...'
             value={search}
             onValueChange={setSearch}
             {...props}

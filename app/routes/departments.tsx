@@ -289,6 +289,7 @@ export default function Departments() {
                             size='sm'
                             color='warning'
                             onPress={createDisclosure.onOpen}
+                            className='bg-warning/70 dark:bg-warning/70 text-white hover:shadow-lg hover:scale-[1.01] transition-all duration-300'
                         >
                             Add Department
                         </Button>
@@ -525,7 +526,7 @@ export default function Departments() {
                                 {selectedDepartment && (
                                     <>
                                         {/* Header Card */}
-                                        <Card className='bg-gradient-to-br from-warning-100 to-warning-50 dark:from-warning-900/10 dark:to-warning-800/20 border-none shadow-sm'>
+                                        <Card className='bg-gradient-to-br from-warning-100 to-warning-50 dark:from-warning-900/10 dark:to-warning-800/20 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'>
                                             <CardBody className='flex flex-row items-center gap-4 py-5'>
                                                 <div className='size-14 rounded-xl bg-warning-500/20 flex items-center justify-center'>
                                                     <Building2 className='size-7 text-warning-600 dark:text-warning-400' />
@@ -577,7 +578,7 @@ export default function Departments() {
                                                 </span>
                                             </div>
                                             {(selectedDepartment.head as any)?.name ? (
-                                                <Card className='border border-zinc-200 dark:border-zinc-800 shadow-none'>
+                                                <Card className='shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'>
                                                     <CardBody className='flex flex-row items-center gap-3 py-3'>
                                                         <Avatar
                                                             name={(selectedDepartment.head as any)?.name}
@@ -610,7 +611,7 @@ export default function Departments() {
 
                                         {/* Stats Row */}
                                         <div className='grid grid-cols-2 gap-3'>
-                                            <Card className='border border-zinc-200 dark:border-zinc-800 shadow-none'>
+                                            <Card className='shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'>
                                                 <CardBody className='py-3 px-4'>
                                                     <div className='flex items-center gap-2 mb-1'>
                                                         <Users className='size-4 text-primary-500' />
@@ -621,7 +622,7 @@ export default function Departments() {
                                                     </p>
                                                 </CardBody>
                                             </Card>
-                                            <Card className='border border-zinc-200 dark:border-zinc-800 shadow-none'>
+                                            <Card className='shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'>
                                                 <CardBody className='py-3 px-4'>
                                                     <div className='flex items-center gap-2 mb-1'>
                                                         <Calendar className='size-4 text-success-500' />
@@ -827,7 +828,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const sessionData = await getSessionData(request)
 
     if (!authenticated) {
-        return redirect("/login-email")
+        return redirect("/")
     }
     return { sessionData, baseUrl, search }
 }

@@ -2346,6 +2346,7 @@ export class LeaveRequestController {
             }
 
             const result = await this.calculateWorkingDaysInternal(start, end)
+            const holidaysInRange = await this.getHolidaysInRange(start, end)
 
             return successResponseObject(
                 "Working days calculated successfully",
@@ -2360,7 +2361,9 @@ export class LeaveRequestController {
                     workingDays: result.total,
                     breakdown: result.breakdown,
                     includesWeekends: this.countWeekends(start, end) > 0,
-                    holidays: await this.getHolidaysInRange(start, end),
+                    holidays: holidaysInRange,
+                    skippedHolidayDates: result.skippedHolidays || [],
+                    holidaysExcluded: (result.skippedHolidays || []).length,
                 }
             )
         } catch (error) {
@@ -2458,7 +2461,11 @@ export class LeaveRequestController {
             const formatDate = (date: Date) => {
                 return date.toISOString().split('T')[0]
             }
-            
+
+            // Calculate working days and get holidays in the period
+            const workingDaysResult = await this.calculateWorkingDaysInternal(start, actualEndDate)
+            const holidaysInRange = await this.getHolidaysInRange(start, actualEndDate)
+
             return successResponseObject(
                 "Period and resumption date calculated successfully",
                 {
@@ -2469,7 +2476,14 @@ export class LeaveRequestController {
                     },
                     resumptionDate: formatDate(resumptionDate),
                     computedEndDate,
-                    requestedDays: numberOfDays || null
+                    requestedDays: numberOfDays || null,
+                    // Include working days info
+                    workingDays: workingDaysResult.total,
+                    workingDaysBreakdown: workingDaysResult.breakdown,
+                    // Include holidays info
+                    holidaysInPeriod: holidaysInRange.map(h => h.name),
+                    holidayDatesSkipped: workingDaysResult.skippedHolidays || [],
+                    totalHolidaysExcluded: (workingDaysResult.skippedHolidays || []).length,
                 }
             )
         } catch (error) {
@@ -2821,13 +2835,16 @@ export class LeaveRequestController {
     private static async calculateWorkingDaysInternal(
         startDate: Date,
         endDate: Date
-    ): Promise<{ total: number; breakdown: any }> {
+    ): Promise<{ total: number; breakdown: any; skippedHolidays?: string[] }> {
         const breakdown: any = {}
         let total = 0
+        const skippedHolidays: string[] = []
 
-        const currentDate = new Date(startDate)
+        // Normalize to start of day
+        const currentDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate())
+        const normalizedEndDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate())
 
-        while (currentDate <= endDate) {
+        while (currentDate <= normalizedEndDate) {
             const year = currentDate.getFullYear()
 
             // Skip weekends
@@ -2836,7 +2853,9 @@ export class LeaveRequestController {
                 // Check if it's a holiday
                 const isHoliday = await Holiday.isHoliday(currentDate)
 
-                if (!isHoliday) {
+                if (isHoliday) {
+                    skippedHolidays.push(currentDate.toISOString().split('T')[0])
+                } else {
                     breakdown[year] = (breakdown[year] || 0) + 1
                     total++
                 }
@@ -2845,7 +2864,11 @@ export class LeaveRequestController {
             currentDate.setDate(currentDate.getDate() + 1)
         }
 
-        return { total, breakdown }
+        if (skippedHolidays.length > 0) {
+            console.log(`[LeaveRequest] Skipped ${skippedHolidays.length} holiday(s): ${skippedHolidays.join(', ')}`)
+        }
+
+        return { total, breakdown, skippedHolidays }
     }
 
     private static countWeekends(startDate: Date, endDate: Date): number {
@@ -2923,9 +2946,9 @@ export class LeaveRequestController {
                 ])
             }
 
-            // Build query for approved leave requests
+            // Build query for leave requests (all filterable statuses)
             const query: any = {
-                status: LeaveStatus.APPROVED,
+                status: { $in: [LeaveStatus.APPROVED, LeaveStatus.PENDING, LeaveStatus.ENDORSED, LeaveStatus.REJECTED] },
                 $or: [
                     { startDate: { $lte: end, $gte: start } },
                     { endDate: { $gte: start, $lte: end } },

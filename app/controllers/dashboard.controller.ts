@@ -461,10 +461,10 @@ export class DashboardController {
             ])
 
             const statusCounts: Record<string, number> = {
-                pending: 0,
-                endorsed: 0,
-                approved: 0,
-                rejected: 0,
+                [LeaveStatus.PENDING]: 0,
+                [LeaveStatus.ENDORSED]: 0,
+                [LeaveStatus.APPROVED]: 0,
+                [LeaveStatus.REJECTED]: 0,
             }
 
             for (const stat of departmentStats) {
@@ -485,11 +485,11 @@ export class DashboardController {
                     pendingApprovals,
                     avgApprovalTime: `${avgApprovalTime} hours`,
                     approvalRate:
-                        statusCounts.approved + statusCounts.rejected > 0
+                        statusCounts[LeaveStatus.APPROVED] + statusCounts[LeaveStatus.REJECTED] > 0
                             ? Math.round(
-                                  (statusCounts.approved /
-                                      (statusCounts.approved +
-                                          statusCounts.rejected)) *
+                                  (statusCounts[LeaveStatus.APPROVED] /
+                                      (statusCounts[LeaveStatus.APPROVED] +
+                                          statusCounts[LeaveStatus.REJECTED])) *
                                       100
                               )
                             : 0,
@@ -596,10 +596,10 @@ export class DashboardController {
                 ).length,
             }
 
-            // Get upcoming approved leaves
+            // Get upcoming leaves (approved, pending, or endorsed)
             const upcomingLeaves = await LeaveRequest.find({
                 staff: user._id,
-                status: LeaveStatus.APPROVED,
+                status: { $in: [LeaveStatus.APPROVED, LeaveStatus.PENDING, LeaveStatus.ENDORSED] },
                 startDate: { $gte: today },
             })
                 .sort({ startDate: 1 })
@@ -710,6 +710,32 @@ export class DashboardController {
                 },
             ])
 
+            // Monthly trend for staff's own requests (YTD)
+            const monthlyTrend = []
+            for (let month = 0; month <= today.getMonth(); month++) {
+                const monthStart = new Date(currentYear, month, 1)
+                const monthEnd = new Date(currentYear, month + 1, 0)
+                const monthName = monthStart.toLocaleString("default", { month: "short" })
+
+                const monthRequests = myRequests.filter((r) => {
+                    const created = new Date(r.createdAt as any)
+                    return created >= monthStart && created <= monthEnd
+                })
+
+                const monthApprovals = myRequests.filter((r) => {
+                    if (r.status !== LeaveStatus.APPROVED || !r.approval?.at) return false
+                    const approvedAt = new Date(r.approval.at)
+                    return approvedAt >= monthStart && approvedAt <= monthEnd
+                })
+
+                monthlyTrend.push({
+                    month: monthName,
+                    requests: monthRequests.length,
+                    approved: monthApprovals.length,
+                    days: monthRequests.reduce((sum, r) => sum + r.workingDays, 0),
+                })
+            }
+
             const dashboard = {
                 profile: {
                     name: staff.name,
@@ -724,6 +750,7 @@ export class DashboardController {
                     startDate: l.startDate,
                     endDate: l.endDate,
                     workingDays: l.workingDays,
+                    status: l.status,
                     daysUntilStart: Math.max(
                         0,
                         Math.ceil(
@@ -753,6 +780,7 @@ export class DashboardController {
                     timesUsed: h.count,
                     totalDaysTaken: h.totalDays,
                 })),
+                monthlyTrend,
                 quickStats: {
                     daysUsedThisYear: balances.reduce(
                         (sum, b) => sum + b.used,

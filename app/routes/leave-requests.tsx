@@ -157,6 +157,8 @@ export default function LeaveRequests() {
         workingDays: number
         resumptionDate: string
         holidays: string[]
+        holidayDatesSkipped: string[]
+        totalHolidaysExcluded: number
     } | null>(null)
 
     const [isCalculating, setIsCalculating] = useState(false)
@@ -191,6 +193,8 @@ export default function LeaveRequests() {
                         workingDays: response.data.data.workingDays,
                         resumptionDate: response.data.data.resumptionDate,
                         holidays: response.data.data.holidaysInPeriod || [],
+                        holidayDatesSkipped: response.data.data.holidayDatesSkipped || [],
+                        totalHolidaysExcluded: response.data.data.totalHolidaysExcluded || 0,
                     })
                 }
             } catch (error) {
@@ -618,6 +622,7 @@ export default function LeaveRequests() {
                         size='sm'
                         startContent={<CalendarPlus className='size-4' />}
                         onPress={createDisclosure.onOpen}
+                        className='bg-warning/70 dark:bg-warning/70 text-white hover:shadow-lg hover:scale-[1.01] transition-all duration-300'
                     >
                         New Request
                     </Button>
@@ -633,7 +638,7 @@ export default function LeaveRequests() {
                         balancesData?.data?.balances?.map((balance: any) => (
                             <Card
                                 key={balance.leaveType}
-                                className='bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800'
+                                className='bg-zinc-50 dark:bg-zinc-900 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'
                             >
                                 <CardBody className='p-3'>
                                     <div className='flex items-center justify-between mb-2'>
@@ -869,7 +874,7 @@ export default function LeaveRequests() {
 
                                 {/* Balance info for selected type */}
                                 {formData.leaveType && (
-                                    <Card className='bg-zinc-50 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800'>
+                                    <Card className='bg-zinc-50 dark:bg-zinc-900 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'>
                                         <CardBody className='p-3'>
                                             <div className='flex items-center justify-between'>
                                                 <span className='text-sm text-zinc-600 dark:text-zinc-400'>
@@ -944,7 +949,7 @@ export default function LeaveRequests() {
 
                                 {/* Period calculation result */}
                                 {(isCalculating || periodData) && (
-                                    <Card className='border border-zinc-200 dark:border-zinc-800'>
+                                    <Card className='shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'>
                                         <CardBody className='p-4'>
                                             {isCalculating ? (
                                                 <div className='flex items-center gap-2'>
@@ -977,26 +982,34 @@ export default function LeaveRequests() {
                                                             ).toFormat("ccc, LLL d yyyy")}
                                                         </span>
                                                     </div>
-                                                    {periodData.holidays.length > 0 && (
+                                                    {(periodData.holidays.length > 0 || periodData.totalHolidaysExcluded > 0) && (
                                                         <>
                                                             <Divider />
                                                             <div>
-                                                                <span className='text-xs text-zinc-500'>
-                                                                    Holidays in period:
-                                                                </span>
-                                                                <div className='flex flex-wrap gap-1 mt-1'>
-                                                                    {periodData.holidays.map(
-                                                                        (h, i) => (
-                                                                            <Chip
-                                                                                key={i}
-                                                                                size='sm'
-                                                                                variant='flat'
-                                                                            >
-                                                                                {h}
-                                                                            </Chip>
-                                                                        )
-                                                                    )}
+                                                                <div className='flex items-center justify-between mb-1'>
+                                                                    <span className='text-xs text-zinc-500'>
+                                                                        Holidays excluded:
+                                                                    </span>
+                                                                    <span className='text-xs font-medium text-success-600'>
+                                                                        {periodData.totalHolidaysExcluded} day{periodData.totalHolidaysExcluded !== 1 ? 's' : ''} not counted
+                                                                    </span>
                                                                 </div>
+                                                                {periodData.holidays.length > 0 && (
+                                                                    <div className='flex flex-wrap gap-1 mt-1'>
+                                                                        {periodData.holidays.map(
+                                                                            (h, i) => (
+                                                                                <Chip
+                                                                                    key={i}
+                                                                                    size='sm'
+                                                                                    variant='flat'
+                                                                                    color='success'
+                                                                                >
+                                                                                    {h}
+                                                                                </Chip>
+                                                                            )
+                                                                        )}
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                         </>
                                                     )}
@@ -1069,7 +1082,7 @@ export default function LeaveRequests() {
                                 {selectedRequest && (
                                     <>
                                         {/* Header Card */}
-                                        <Card className='bg-gradient-to-br from-warning-100 to-warning-50 dark:from-warning-900/10 dark:to-warning-800/20 border-none shadow-sm'>
+                                        <Card className='bg-gradient-to-br from-warning-100 to-warning-50 dark:from-warning-900/10 dark:to-warning-800/20 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'>
                                             <CardBody className='py-5'>
                                                 <div className='flex items-center justify-between mb-3'>
                                                     <LeaveTypeChip
@@ -1102,7 +1115,7 @@ export default function LeaveRequests() {
                                                     Staff Information
                                                 </span>
                                             </div>
-                                            <Card className='border border-zinc-200 dark:border-zinc-800 shadow-none'>
+                                            <Card className='shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20'>
                                                 <CardBody className='p-4 space-y-2'>
                                                     <div className='flex justify-between'>
                                                         <span className='text-sm text-zinc-500'>
@@ -1597,7 +1610,7 @@ export default function LeaveRequests() {
 export async function loader({ request }: LoaderFunctionArgs) {
     const authenticated = await isAuthenticated(request)
     if (!authenticated) {
-        return redirect("/login-email")
+        return redirect("/")
     }
     const sessionData = await getSessionData(request)
     const baseUrl = process.env.BASE_URL as string

@@ -45,7 +45,7 @@ export const DataTable = (props: DataTableProps) => {
                             : "md:h-[60vh] xl:!h-[78vh]"
                     } h-[65vh] overflow-y-auto w-[97vw] vertical-scrollbar md:w-full overflow-x-auto shadow-none hidden md:block`,
                     wrapper:
-                        "vertical-scrollbar horizontal-scrollbar bg-transparent dark:border-zinc-800 border-2",
+                        "vertical-scrollbar horizontal-scrollbar bg-transparent dark:border-zinc-800 border-2 border-zinc-200 shadow-none",
                     td: "text-sm",
                     thead: "sticky top-0 z-10 ",
                     th: "dark:bg-zinc-900 bg-zinc-100",

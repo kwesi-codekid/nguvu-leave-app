@@ -23,12 +23,28 @@ import {
 
 export class CallInController {
     /**
+     * Check if MongoDB transactions are supported
+     */
+    private static isReplicaSet(): boolean {
+        const topology = mongoose.connection.db?.topology
+        return topology?.description?.type === 'ReplicaSetWithPrimary' || 
+               topology?.description?.type === 'ReplicaSetNoPrimary' ||
+               process.env.USE_TRANSACTIONS === 'true'
+    }
+
+    /**
      * Create a new call-in
      * POST /api/call-ins
      */
     static async createCallIn(req: Request): Promise<ResponseObject> {
-        const session = await mongoose.startSession()
-        session.startTransaction()
+        // Only use transactions if in replica set mode
+        const useTransaction = this.isReplicaSet()
+        let session: any = null
+        
+        if (useTransaction) {
+            session = await mongoose.startSession()
+            session.startTransaction()
+        }
 
         try {
             const {
@@ -39,6 +55,14 @@ export class CallInController {
                 workingDaysRecovered,
             } = req.body
             const user = (req as any).user
+
+            console.log("[CallIn Controller] Received data:", {
+                leaveRequestId,
+                callInStartDate,
+                callInEndDate,
+                reason: reason?.substring(0, 50),
+                reasonLength: reason?.length,
+            })
 
             // Validation
             const errors = []
@@ -73,7 +97,7 @@ export class CallInController {
             }
 
             if (errors.length > 0) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return validationErrorResponseObject(
                     "Validation failed",
                     errors
@@ -87,12 +111,12 @@ export class CallInController {
                 .session(session)
 
             if (!leaveRequest) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject("Leave request not found")
             }
 
             if (leaveRequest.status !== LeaveStatus.APPROVED) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Can only call in staff from approved leave"
                 )
@@ -103,7 +127,7 @@ export class CallInController {
                 leaveRequest.department
             ).session(session)
             if (!department) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject("Department not found")
             }
 
@@ -113,7 +137,7 @@ export class CallInController {
             const hasAdminPermission = user?.permissions?.includes("ADMIN")
 
             if (!isDepartmentHead && !hasHRPermission && !hasAdminPermission) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Only department heads or HR/Admin can create call-ins"
                 )
@@ -126,14 +150,14 @@ export class CallInController {
             const leaveEnd = new Date(leaveRequest.endDate)
 
             if (callStart < leaveStart || callEnd > leaveEnd) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Call-in dates must be within the original leave period"
                 )
             }
 
             if (callStart > callEnd) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Call-in start date must be before or equal to end date"
                 )
@@ -151,9 +175,23 @@ export class CallInController {
             }).session(session)
 
             if (existingCallIn) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Overlapping call-in already exists for this leave period"
+                )
+            }
+
+            // Calculate working days if not provided
+            let calculatedWorkingDays = workingDaysRecovered
+            if (!calculatedWorkingDays) {
+                calculatedWorkingDays = await this.calculateWorkingDaysForCallIn(callStart, callEnd)
+                console.log(`[CallIn] Calculated working days: ${calculatedWorkingDays}`)
+            }
+
+            if (calculatedWorkingDays <= 0) {
+                if (session) await session.abortTransaction()
+                return errorResponseObject(
+                    "Call-in period contains no working days (only weekends/holidays)"
                 )
             }
 
@@ -164,17 +202,22 @@ export class CallInController {
                 department: (leaveRequest.department as any)._id,
                 callInStartDate: callStart,
                 callInEndDate: callEnd,
-                workingDaysRecovered: workingDaysRecovered || undefined, // Will be calculated if not provided
+                workingDaysRecovered: calculatedWorkingDays,
                 reason: reason.trim(),
                 requestedBy: user._id,
                 requestedAt: new Date(),
             }
 
-            const callIn = await CallIn.create([callInData], { session })
+            let callIn
+            if (session) {
+                callIn = await CallIn.create([callInData], { session })
+                await session.commitTransaction()
+            } else {
+                const newCallIn = await CallIn.create(callInData)
+                callIn = [newCallIn]
+            }
 
             // The model's post-save hook will automatically process the call-in and credit the balance
-
-            await session.commitTransaction()
 
             // Populate for response
             const populatedCallIn = await CallIn.findById(callIn[0]._id)
@@ -238,13 +281,13 @@ export class CallInController {
                 populatedCallIn
             )
         } catch (error) {
-            await session.abortTransaction()
+            if (session) await session.abortTransaction()
             console.error("Error creating call-in:", error)
             return errorResponseObject(
                 (error as any).message || "Failed to create call-in"
             )
         } finally {
-            session.endSession()
+            if (session) await session.endSession()
         }
     }
 
@@ -2772,6 +2815,41 @@ export class CallInController {
         })
 
         return [csvHeaders, ...csvRows].join("\n")
+    }
+
+    /**
+     * Calculate working days for a call-in period
+     * Excludes weekends and holidays
+     */
+    private static async calculateWorkingDaysForCallIn(
+        startDate: Date,
+        endDate: Date
+    ): Promise<number> {
+        let workingDays = 0
+        const current = new Date(startDate)
+        const end = new Date(endDate)
+
+        // Normalize to start of day
+        current.setHours(0, 0, 0, 0)
+        end.setHours(0, 0, 0, 0)
+
+        while (current <= end) {
+            const dayOfWeek = current.getDay()
+
+            // Skip weekends (0 = Sunday, 6 = Saturday)
+            if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+                // Check if it's a holiday
+                const isHoliday = await Holiday.isHoliday(current)
+
+                if (!isHoliday) {
+                    workingDays++
+                }
+            }
+
+            current.setDate(current.getDate() + 1)
+        }
+
+        return workingDays
     }
 }
 

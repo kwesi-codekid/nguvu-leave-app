@@ -46,23 +46,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     try {
         await connectDB()
 
-        // Simple test to see if route is working
-        const url = new URL(request.url)
-        const op = url.searchParams.get("op")
-        
-        if (op === "test") {
-            return successResponse("API route is working", { test: true })
-        }
-
         // Authenticate
         const user = await getAuthenticatedStaff(request)
         if (!user) {
             return errorResponse("Unauthorized", null, 401)
         }
 
-        console.log("Authenticated user:", user?.name, "Permissions:", user?.permissions)
-
-        console.log("Operation:", op, "Query params:", Object.fromEntries(url.searchParams.entries()))
+        const url = new URL(request.url)
+        const op = url.searchParams.get("op")
 
         // Create a mock request object for the controller
         const mockReq = {
@@ -127,7 +118,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
         // Handle controller response
         if (result.status !== "success") {
-            console.error("Controller error:", result.message, result.data)
             return errorResponse(result.message, null, 400)
         }
 

@@ -73,14 +73,14 @@ export default function AppLayout({
                         {user?.permissions?.some((permission) =>
                             navlink.permittedRoles.includes(permission)
                         ) && (
-                            <NavItem
-                                key={navlink.href}
-                                label={navlink.label}
-                                icon={navlink.icon}
-                                to={navlink.href}
-                                isCollapsed={isCollapsed}
-                            />
-                        )}
+                                <NavItem
+                                    key={navlink.href}
+                                    label={navlink.label}
+                                    icon={navlink.icon}
+                                    to={navlink.href}
+                                    isCollapsed={isCollapsed}
+                                />
+                            )}
                     </Fragment>
                 ))}
             </div>
@@ -112,17 +112,15 @@ export default function AppLayout({
                 <Tooltip content={label} placement='right'>
                     <NavLink
                         to={to as string}
-                        className={`flex items-center justify-center rounded-lg p-2 ${
-                            isActive ? "bg-blue-950/70 dark:bg-zinc-800" : ""
-                        }`}
+                        className={`flex items-center justify-center rounded-lg p-2 ${isActive ? "bg-gray-200 dark:bg-zinc-800" : ""
+                            }`}
                         onClick={onClick}
                     >
                         <div
-                            className={`${
-                                isActive
-                                    ? "text-white"
-                                    : "text-white hover:opacity-60"
-                            } transition-all duration-300`}
+                            className={`${isActive
+                                    ? "text-zinc-900"
+                                    : "text-zinc-600 hover:text-zinc-900"
+                                } transition-all duration-300`}
                         >
                             {icon}
                         </div>
@@ -140,15 +138,13 @@ export default function AppLayout({
         const navLink = (
             <NavLink
                 to={to as string}
-                className={`flex items-center justify-between gap-3 rounded-lg px-2 py-2 ${
-                    isActive ? "bg-blue-950/70 dark:bg-zinc-800" : ""
-                }`}
+                className={`flex items-center justify-between gap-3 rounded-lg px-2 py-2 ${isActive ? "bg-warning/70 dark:bg-warning/70 !text-white" : ""
+                    }`}
                 onClick={onClick}
             >
                 <div
-                    className={`flex ${
-                        isActive ? "text-white" : "text-white hover:opacity-60"
-                    } items-center gap-2 flex-1 transition-all duration-300`}
+                    className={`flex ${isActive ? "text-text-white/10" : "text-zinc-400 hover:text-zinc-600"
+                        } items-center gap-2 flex-1 transition-all duration-300`}
                 >
                     {icon}
                     <span className='text-xs line-clamp-1 max-w-52'>
@@ -182,23 +178,22 @@ export default function AppLayout({
                         width: isCollapsed ? "5rem" : "16rem",
                         transition: { duration: 0.3 },
                     }}
-                    className={`hidden lg:block h-screen bg-blue-900 dark:bg-zinc-950 dark:border-r-2 dark:border-zinc-800 p-4 overflow-hidden`}
+                    className={`hidden lg:block h-screen bg-white dark:bg-zinc-950 dark:border-r-2 dark:border-zinc-800 p-4 overflow-hidden`}
                 >
                     <div className='flex flex-col justify-between h-full'>
                         {/* logo and name */}
                         <div
-                            className={`flex items-center   ${
-                                isCollapsed
+                            className={`flex items-center   ${isCollapsed
                                     ? "justify-center"
                                     : "justify-between"
-                            }`}
+                                }`}
                         >
                             <div className='flex justify-center items-center gap-2 w-full'>
                                 <div className=''>
                                     <Image
                                         src={logo}
                                         className='size-9 object-cover border border-slate-400 bg-white mt-1'
-                                        shadow='lg'
+                                        shadow='sm'
                                         radius='sm'
                                     />
                                 </div>
@@ -213,10 +208,10 @@ export default function AppLayout({
                                     >
                                         <div className='flex items-center justify-between w-full'>
                                             <div className='flex-1'>
-                                                <h1 className='text-white font-bold text-sm'>
+                                                <h1 className=' font-bold text-sm'>
                                                     Leave Management
                                                 </h1>
-                                                <p className='text-xs text-white opacity-50'>
+                                                <p className='text-xs  opacity-50'>
                                                     Staff Portal
                                                 </p>
                                             </div>
@@ -250,9 +245,9 @@ export default function AppLayout({
             </SideDrawer>
 
             {/* page content */}
-            <div className='flex-1 flex flex-col h-full overflow-y-auto vertical-scrollbar bg-white dark:bg-zinc-950'>
+            <div className='flex-1 flex flex-col h-full overflow-y-auto vertical-scrollbar bg-gray-100 dark:bg-zinc-950'>
                 {/* top navbar */}
-                <header className='h-14 w-full border-b-2 dark:border-zinc-800 bg-white dark:bg-zinc-950 sticky top-0 z-50 px-4 shadow-md shadow-zinc-300/10 dark:shadow-zinc-800/10'>
+                <header className='h-14 w-full dark:border-b-2 dark:border-zinc-800 bg-white dark:bg-zinc-950 sticky top-0 z-50 px-4 shadow-md shadow-zinc-300/10 dark:shadow-zinc-800/10 rounded-tl-lg'>
                     <div className='2xl:mx-auto 2xl:max-w-[90rem] h-14 flex items-center justify-between'>
                         <div className='flex items-center gap-4'>
                             {/* Mobile menu toggle - only visible on small screens */}
@@ -298,23 +293,16 @@ export default function AppLayout({
                             {user && <AuthUserDropdown user={user} />}
                         </div>
                     </div>
-                    <div className='h-2 overflow-hidden'>
-                        {pageLoading ||
-                            (navigation.state === "loading" && (
-                                <Progress
-                                    aria-label='Loading'
-                                    aria-labelledby='Loading'
-                                    size='sm'
-                                    color='warning'
-                                    isIndeterminate
-                                />
-                            ))}
-                    </div>
                 </header>
-
                 {/* main content */}
-                <main className='flex-1 w-full 2xl:mx-auto 2xl:max-w-[90rem] p-4 '>
-                    {children}
+                <main className='flex-1 w-full 2xl:mx-auto 2xl:max-w-[90rem] p-4 relative rounded rounded-tl-lg'>
+                    {pageLoading || navigation.state === "loading" ? (
+                        <div className='absolute inset-0 flex items-center justify-center'>
+                            <div className='animate-spin rounded-full h-8 w-8 border-b-2 border-warning'></div>
+                        </div>
+                    ) : (
+                        children
+                    )}
                 </main>
             </div>
         </div>
