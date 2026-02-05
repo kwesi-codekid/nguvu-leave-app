@@ -81,7 +81,7 @@ export function SearchView({ baseUrl, token }: SearchViewProps) {
             <Card>
                 <CardBody className="p-6">
                     <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        <Search className="size-5 text-primary" />
+                        <Search className="size-5 text-warning" />
                         Natural Language Search
                     </h3>
                     <div className="space-y-4">
@@ -115,7 +115,8 @@ export function SearchView({ baseUrl, token }: SearchViewProps) {
                             ))}
                         </div>
                         <Button
-                            color="primary"
+                            color="warning"
+                            className="bg-warning/70"
                             onPress={() => handleNLQuery()}
                             isLoading={isLoading}
                             startContent={!isLoading && <Search className="size-4" />}

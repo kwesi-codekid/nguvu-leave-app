@@ -22,12 +22,12 @@ export function AIModeTabs({
             classNames={{
                 base: "w-full",
                 tabList: "gap-2 w-full relative rounded-none p-0 border-b border-zinc-200 dark:border-zinc-800",
-                cursor: "w-full bg-primary",
+                cursor: "w-full bg-warning",
                 tab: "max-w-fit px-4 h-10",
-                tabContent: "group-data-[selected=true]:text-primary",
+                tabContent: "group-data-[selected=true]:text-warning",
             }}
             variant="underlined"
-            color="primary"
+            color="warning"
         >
             <Tab
                 key="chat"

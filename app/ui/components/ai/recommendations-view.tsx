@@ -115,7 +115,7 @@ export function RecommendationsView({ baseUrl, token }: RecommendationsViewProps
             <Card>
                 <CardBody className="p-6">
                     <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        <Sparkles className="size-5 text-primary" />
+                        <Sparkles className="size-5 text-warning" />
                         Get Smart Leave Recommendations
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -154,7 +154,8 @@ export function RecommendationsView({ baseUrl, token }: RecommendationsViewProps
                         />
                     </div>
                     <Button
-                        color="primary"
+                        color="warning"
+                        className="bg-warning/70"
                         onPress={handleGetRecommendations}
                         isLoading={isLoading}
                         startContent={!isLoading && <Sparkles className="size-4" />}
@@ -182,7 +183,7 @@ export function RecommendationsView({ baseUrl, token }: RecommendationsViewProps
                     {/* Suggested Dates */}
                     <div>
                         <h4 className="font-semibold mb-4 flex items-center gap-2">
-                            <Calendar className="size-5 text-primary" />
+                            <Calendar className="size-5 text-warning" />
                             Suggested Dates
                         </h4>
                         <div className="grid gap-4">
@@ -250,7 +251,7 @@ export function RecommendationsView({ baseUrl, token }: RecommendationsViewProps
                             <ul className="space-y-3">
                                 {recommendations.insights.map((insight, idx) => (
                                     <li key={idx} className="flex items-start gap-3">
-                                        <ChevronRight className="size-4 text-primary mt-1 flex-shrink-0" />
+                                        <ChevronRight className="size-4 text-warning mt-1 flex-shrink-0" />
                                         <span className="text-sm">{insight}</span>
                                     </li>
                                 ))}

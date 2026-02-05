@@ -139,12 +139,12 @@ export function ChatSidebar({
             {/* Header */}
             <div className="p-4 border-b border-zinc-200 dark:border-zinc-800">
                 <div className="flex items-center gap-2 mb-4">
-                    <Bot className="size-6 text-primary" />
+                    <Bot className="size-6 text-warning/70" />
                     <h2 className="font-semibold text-lg">AI Assistant</h2>
                 </div>
                 <Button
-                    color="primary"
-                    className="w-full"
+                    color="warning"
+                    className="w-full bg-warning/70"
                     startContent={<Plus className="size-4" />}
                     onPress={onNewChat}
                 >
@@ -198,7 +198,7 @@ export function ChatSidebar({
                                             key={conv._id}
                                             className={`group flex items-center gap-2 px-2 py-2 rounded-lg cursor-pointer transition-colors ${
                                                 selectedId === conv._id
-                                                    ? "bg-primary/10 text-primary"
+                                                    ? "bg-warning/10 text-warning"
                                                     : "hover:bg-zinc-100 dark:hover:bg-zinc-800"
                                             }`}
                                             onClick={() => onSelect(conv._id)}
@@ -299,7 +299,7 @@ export function ChatSidebar({
                         <Button variant="flat" onPress={() => setRenameModalOpen(false)}>
                             Cancel
                         </Button>
-                        <Button color="primary" onPress={handleRenameSubmit}>
+                        <Button color="warning" onPress={handleRenameSubmit}>
                             Save
                         </Button>
                     </ModalFooter>

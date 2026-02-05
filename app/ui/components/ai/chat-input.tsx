@@ -57,10 +57,10 @@ export function ChatInput({
             />
             <Button
                 isIconOnly
-                color="primary"
+                color="warning"
                 onPress={handleSend}
                 isDisabled={!message.trim() || isLoading || disabled}
-                className="h-10 w-10"
+                className="h-10 w-10 bg-warning/70"
             >
                 {isLoading ? (
                     <Loader2 className="size-4 animate-spin" />

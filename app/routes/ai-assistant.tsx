@@ -253,8 +253,8 @@ export default function AIAssistantPage() {
     // Render chat empty state
     const renderChatEmptyState = () => (
         <div className="flex flex-col items-center justify-center h-full text-zinc-500 p-8">
-            <div className="size-20 rounded-full bg-secondary/20 flex items-center justify-center mb-6">
-                <Bot className="size-10 text-secondary" />
+            <div className="size-20 rounded-full bg-warning/20 flex items-center justify-center mb-6">
+                <Bot className="size-10 text-warning" />
             </div>
             <h2 className="text-xl font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
                 How can I help you today?
@@ -273,6 +273,7 @@ export default function AIAssistantPage() {
                         key={suggestion}
                         size="sm"
                         variant="flat"
+                        className="bg-warning/70"
                         onPress={() => handleSendMessage(suggestion)}
                     >
                         {suggestion}

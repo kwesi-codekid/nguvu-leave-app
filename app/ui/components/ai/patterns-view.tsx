@@ -102,7 +102,7 @@ export function PatternsView({ baseUrl, token, isHRorAdmin }: PatternsViewProps)
             <Card>
                 <CardBody className="p-6">
                     <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                        <TrendingUp className="size-5 text-primary" />
+                        <TrendingUp className="size-5 text-warning" />
                         Pattern Analysis
                     </h3>
                     <div className="flex items-end gap-4">
@@ -125,7 +125,7 @@ export function PatternsView({ baseUrl, token, isHRorAdmin }: PatternsViewProps)
                             ))}
                         </Select>
                         <Button
-                            color="primary"
+                            color="warning"
                             onPress={handleAnalyzePatterns}
                             isLoading={isLoading}
                             startContent={!isLoading && <TrendingUp className="size-4" />}
@@ -152,7 +152,7 @@ export function PatternsView({ baseUrl, token, isHRorAdmin }: PatternsViewProps)
             {patterns && !isLoading && (
                 <div className="space-y-6">
                     {/* Summary */}
-                    <Card className="bg-primary-50 dark:bg-primary-900/20">
+                    <Card className="bg-warning-50 dark:bg-warning-900/20">
                         <CardBody className="p-6">
                             <h4 className="font-semibold mb-2">Summary</h4>
                             <p className="text-sm">{patterns.summary}</p>
