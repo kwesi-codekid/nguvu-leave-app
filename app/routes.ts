@@ -18,6 +18,7 @@ export default [
     route("call-ins", "routes/call-ins.tsx"),
     route("reports", "routes/reports.tsx"),
     route("audit-logs", "routes/audit-logs.tsx"),
+    route("ai-assistant", "routes/ai-assistant.tsx"),
     route("profile", "routes/profile.tsx"),
     route("logout", "routes/logout.tsx"),
     route("api-doc", "routes/api-doc.tsx"),

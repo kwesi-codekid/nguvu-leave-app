@@ -15,7 +15,6 @@ import { navlinks } from "../lib/navlinks"
 import { AuthUserDropdown } from "../components/dropdowns"
 import { ThemeSwitcher } from "../components/theme-switcher"
 import { NotificationDropdown } from "../components/notification-dropdown"
-import { AIButton } from "../components/ai-button"
 
 export default function AppLayout({
     children,
@@ -314,15 +313,6 @@ export default function AppLayout({
                     )}
                 </main>
 
-                {/* AI Assistant Floating Button */}
-                {baseUrl && token && user && (
-                    <AIButton
-                        baseUrl={baseUrl}
-                        token={token}
-                        userPermissions={user.permissions}
-                        variant="floating"
-                    />
-                )}
             </div>
         </div>
     )

@@ -11,6 +11,7 @@ import {
     LayoutDashboard,
     ChartNoAxesColumn,
     CalendarDays,
+    Bot,
 } from "lucide-react"
 
 export const navlinks: {
@@ -90,5 +91,11 @@ export const navlinks: {
         icon: <Logs className='w-5 h-5' />,
         permittedRoles: ["HR", "ADMIN", "MANAGER"],
         href: "/audit-logs",
+    },
+    {
+        label: "AI Assistant",
+        icon: <Bot className='w-5 h-5' />,
+        permittedRoles: ["STAFF", "MANAGER", "HR", "ADMIN"],
+        href: "/ai-assistant",
     },
 ]

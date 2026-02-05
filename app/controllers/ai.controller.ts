@@ -6,6 +6,7 @@ import {
     validationErrorResponseObject,
 } from "../utils/api-utils"
 import { ResponseObject } from "../utils/types"
+import ChatConversation, { ChatMode } from "../models/chat-conversation.model"
 
 export class AIController {
     /**
@@ -263,7 +264,7 @@ export class AIController {
                 return errorResponseObject("Unauthorized")
             }
 
-            const { message, conversationHistory } = req.body
+            const { message, conversationId, mode } = req.body
 
             if (!message || typeof message !== "string" || message.trim().length < 1) {
                 return validationErrorResponseObject("Validation failed", [
@@ -274,10 +275,34 @@ export class AIController {
                 ])
             }
 
-            const history = Array.isArray(conversationHistory)
-                ? conversationHistory
-                : []
+            // Get or create conversation
+            let conversation
+            if (conversationId) {
+                conversation = await ChatConversation.findOne({
+                    _id: conversationId,
+                    staff: user._id,
+                })
+                if (!conversation) {
+                    return errorResponseObject("Conversation not found")
+                }
+            } else {
+                // Create new conversation
+                conversation = await ChatConversation.createConversation(
+                    user._id.toString(),
+                    (mode as ChatMode) || ChatMode.CHAT
+                )
+            }
 
+            // Get conversation history from DB
+            const history = conversation.messages.map((m: any) => ({
+                role: m.role,
+                content: m.content,
+            }))
+
+            // Add user message to conversation
+            await conversation.addMessage("user", message.trim(), { mode: mode || "chat" })
+
+            // Generate AI response
             const response = await AIService.chat(
                 message.trim(),
                 history,
@@ -285,13 +310,13 @@ export class AIController {
                 user.permissions || []
             )
 
+            // Add assistant response to conversation
+            await conversation.addMessage("assistant", response, { mode: mode || "chat" })
+
             return successResponseObject("Chat response generated", {
                 response,
-                conversationHistory: [
-                    ...history,
-                    { role: "user", content: message.trim() },
-                    { role: "assistant", content: response },
-                ],
+                conversationId: conversation._id,
+                title: conversation.title,
             })
         } catch (error) {
             console.error("AI Chat Error:", error)
@@ -299,6 +324,267 @@ export class AIController {
                 error instanceof Error
                     ? error.message
                     : "Failed to generate response"
+            return errorResponseObject(message)
+        }
+    }
+
+    /**
+     * Get user's conversations
+     * GET /api/ai?op=conversations
+     */
+    static async getConversations(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+
+            if (!user) {
+                return errorResponseObject("Unauthorized")
+            }
+
+            const { limit, skip, search } = req.query
+
+            let conversations
+            if (search && typeof search === "string" && search.trim()) {
+                conversations = await ChatConversation.searchConversations(
+                    user._id.toString(),
+                    search.trim(),
+                    { limit: limit ? parseInt(limit as string) : 50 }
+                )
+            } else {
+                conversations = await ChatConversation.getConversationsForStaff(
+                    user._id.toString(),
+                    {
+                        limit: limit ? parseInt(limit as string) : 50,
+                        skip: skip ? parseInt(skip as string) : 0,
+                        pinnedFirst: true,
+                    }
+                )
+            }
+
+            const count = await ChatConversation.getConversationCount(user._id.toString())
+
+            return successResponseObject("Conversations retrieved", {
+                conversations,
+                total: count,
+            })
+        } catch (error) {
+            console.error("Get Conversations Error:", error)
+            const message =
+                error instanceof Error
+                    ? error.message
+                    : "Failed to get conversations"
+            return errorResponseObject(message)
+        }
+    }
+
+    /**
+     * Get single conversation with messages
+     * GET /api/ai?op=conversation&id=xxx
+     */
+    static async getConversation(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+
+            if (!user) {
+                return errorResponseObject("Unauthorized")
+            }
+
+            const { id } = req.query
+
+            if (!id) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "id", message: "Conversation ID is required" },
+                ])
+            }
+
+            const conversation = await ChatConversation.findOne({
+                _id: id,
+                staff: user._id,
+            }).lean()
+
+            if (!conversation) {
+                return errorResponseObject("Conversation not found")
+            }
+
+            return successResponseObject("Conversation retrieved", conversation)
+        } catch (error) {
+            console.error("Get Conversation Error:", error)
+            const message =
+                error instanceof Error
+                    ? error.message
+                    : "Failed to get conversation"
+            return errorResponseObject(message)
+        }
+    }
+
+    /**
+     * Create a new conversation
+     * POST /api/ai?op=create-conversation
+     */
+    static async createConversation(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+
+            if (!user) {
+                return errorResponseObject("Unauthorized")
+            }
+
+            const { mode, title } = req.body
+
+            const conversation = await ChatConversation.createConversation(
+                user._id.toString(),
+                (mode as ChatMode) || ChatMode.CHAT,
+                title
+            )
+
+            return successResponseObject("Conversation created", {
+                _id: conversation._id,
+                title: conversation.title,
+                mode: conversation.mode,
+                isPinned: conversation.isPinned,
+                lastMessageAt: conversation.lastMessageAt,
+                createdAt: conversation.createdAt,
+            })
+        } catch (error) {
+            console.error("Create Conversation Error:", error)
+            const message =
+                error instanceof Error
+                    ? error.message
+                    : "Failed to create conversation"
+            return errorResponseObject(message)
+        }
+    }
+
+    /**
+     * Delete a conversation
+     * POST /api/ai?op=delete-conversation
+     */
+    static async deleteConversation(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+
+            if (!user) {
+                return errorResponseObject("Unauthorized")
+            }
+
+            const { conversationId } = req.body
+
+            if (!conversationId) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "conversationId", message: "Conversation ID is required" },
+                ])
+            }
+
+            const result = await ChatConversation.deleteOne({
+                _id: conversationId,
+                staff: user._id,
+            })
+
+            if (result.deletedCount === 0) {
+                return errorResponseObject("Conversation not found or unauthorized")
+            }
+
+            return successResponseObject("Conversation deleted", { deleted: true })
+        } catch (error) {
+            console.error("Delete Conversation Error:", error)
+            const message =
+                error instanceof Error
+                    ? error.message
+                    : "Failed to delete conversation"
+            return errorResponseObject(message)
+        }
+    }
+
+    /**
+     * Toggle pin status of a conversation
+     * POST /api/ai?op=pin-conversation
+     */
+    static async pinConversation(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+
+            if (!user) {
+                return errorResponseObject("Unauthorized")
+            }
+
+            const { conversationId } = req.body
+
+            if (!conversationId) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "conversationId", message: "Conversation ID is required" },
+                ])
+            }
+
+            const conversation = await ChatConversation.findOne({
+                _id: conversationId,
+                staff: user._id,
+            })
+
+            if (!conversation) {
+                return errorResponseObject("Conversation not found")
+            }
+
+            const isPinned = await conversation.togglePin()
+
+            return successResponseObject(
+                isPinned ? "Conversation pinned" : "Conversation unpinned",
+                { isPinned }
+            )
+        } catch (error) {
+            console.error("Pin Conversation Error:", error)
+            const message =
+                error instanceof Error
+                    ? error.message
+                    : "Failed to pin conversation"
+            return errorResponseObject(message)
+        }
+    }
+
+    /**
+     * Rename a conversation
+     * POST /api/ai?op=rename-conversation
+     */
+    static async renameConversation(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+
+            if (!user) {
+                return errorResponseObject("Unauthorized")
+            }
+
+            const { conversationId, title } = req.body
+
+            if (!conversationId) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "conversationId", message: "Conversation ID is required" },
+                ])
+            }
+
+            if (!title || typeof title !== "string" || title.trim().length < 1) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "title", message: "Title is required" },
+                ])
+            }
+
+            const conversation = await ChatConversation.findOne({
+                _id: conversationId,
+                staff: user._id,
+            })
+
+            if (!conversation) {
+                return errorResponseObject("Conversation not found")
+            }
+
+            await conversation.updateTitle(title.trim())
+
+            return successResponseObject("Conversation renamed", {
+                title: conversation.title,
+            })
+        } catch (error) {
+            console.error("Rename Conversation Error:", error)
+            const message =
+                error instanceof Error
+                    ? error.message
+                    : "Failed to rename conversation"
             return errorResponseObject(message)
         }
     }

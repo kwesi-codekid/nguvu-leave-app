@@ -123,9 +123,41 @@ export async function loader({ request }: LoaderFunctionArgs) {
                     : errorResponse(result.message, null, 500)
             }
 
+            case "conversations": {
+                // Get user's conversations
+                const result = await AIController.getConversations(req)
+
+                if (result.status === "validation_error") {
+                    return validationErrorResponse(
+                        result.message,
+                        result.errors || []
+                    )
+                }
+
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "conversation": {
+                // Get single conversation by id
+                const result = await AIController.getConversation(req)
+
+                if (result.status === "validation_error") {
+                    return validationErrorResponse(
+                        result.message,
+                        result.errors || []
+                    )
+                }
+
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
             default:
                 return errorResponse(
-                    "Invalid operation. GET operations: patterns, report. Use POST for: recommendations, query, chat",
+                    "Invalid operation. GET operations: patterns, report, conversations, conversation. Use POST for: recommendations, query, chat, create-conversation, delete-conversation, pin-conversation, rename-conversation",
                     null,
                     400
                 )
@@ -222,9 +254,73 @@ export async function action({ request }: ActionFunctionArgs) {
                     : errorResponse(result.message, null, 500)
             }
 
+            case "create-conversation": {
+                // Create a new conversation
+                const result = await AIController.createConversation(req)
+
+                if (result.status === "validation_error") {
+                    return validationErrorResponse(
+                        result.message,
+                        result.errors || []
+                    )
+                }
+
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "delete-conversation": {
+                // Delete a conversation
+                const result = await AIController.deleteConversation(req)
+
+                if (result.status === "validation_error") {
+                    return validationErrorResponse(
+                        result.message,
+                        result.errors || []
+                    )
+                }
+
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "pin-conversation": {
+                // Toggle pin status
+                const result = await AIController.pinConversation(req)
+
+                if (result.status === "validation_error") {
+                    return validationErrorResponse(
+                        result.message,
+                        result.errors || []
+                    )
+                }
+
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "rename-conversation": {
+                // Rename a conversation
+                const result = await AIController.renameConversation(req)
+
+                if (result.status === "validation_error") {
+                    return validationErrorResponse(
+                        result.message,
+                        result.errors || []
+                    )
+                }
+
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
             default:
                 return errorResponse(
-                    "Invalid operation. POST operations: recommendations, query, chat. Use GET for: patterns, report",
+                    "Invalid operation. POST operations: recommendations, query, chat, create-conversation, delete-conversation, pin-conversation, rename-conversation. Use GET for: patterns, report, conversations, conversation",
                     null,
                     400
                 )
