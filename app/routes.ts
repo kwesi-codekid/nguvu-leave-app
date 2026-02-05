@@ -44,6 +44,12 @@ export default [
     route("api/audit-logs", "routes/api/audit-logs.ts"),
     route("api/audit-logs/:id", "routes/api/audit-logs.[id].ts"),
     route("api/dashboard", "routes/api/dashboard.ts"),
+    route("api/notifications", "routes/api/notifications.ts"),
+    route("api/notifications/:id", "routes/api/notifications.[id].ts"),
+    route("api/ai", "routes/api/ai.ts"),
+
+    // Notifications page
+    route("notifications", "routes/notifications.tsx"),
 
     // Catch-all
     route("*", "routes/$.tsx"),
