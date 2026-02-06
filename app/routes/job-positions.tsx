@@ -248,7 +248,18 @@ export default function JobPositions() {
                     },
                 }
             )
-            mutate() // Refresh the list
+            // Immediately update local cache then re-fetch
+            const filtered = {
+                ...data,
+                data: {
+                    ...data?.data,
+                    positions: data?.data?.positions?.filter(
+                        (p: JobPositionInterface) => p._id !== selectedPosition._id
+                    ),
+                },
+            }
+            await mutate(filtered, false)
+            mutate()
             onClose()
             addToast({
                 color: "success",
@@ -305,7 +316,9 @@ export default function JobPositions() {
                         isLoading={isLoading}
                         totalPages={data?.data?.pagination?.totalPages}
                     >
-                        {data?.data?.positions?.map(
+                        {data?.data?.positions?.filter(
+                            (position: JobPositionInterface) => position.isActive
+                        ).map(
                             (position: JobPositionInterface) => (
                                 <TableRow
                                     key={position._id}
@@ -402,7 +415,9 @@ export default function JobPositions() {
                     {/* mobile view: data table */}
                     <MobileList
                         isLoading={isLoading}
-                        listContent={data?.data?.positions?.map(
+                        listContent={data?.data?.positions?.filter(
+                            (position: JobPositionInterface) => position.isActive
+                        ).map(
                             (position: JobPositionInterface) => ({
                                 startIcon: (
                                     <BriefcaseBusiness className='size-5' />
