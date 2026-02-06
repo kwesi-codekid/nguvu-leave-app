@@ -786,10 +786,12 @@ export default function LeaveRequests() {
                                     <p className='text-xs text-zinc-500 dark:text-zinc-400 mt-1'>
                                         Used: {balance.used} days
                                     </p>
-                                    <p className='text-xs text-zinc-500 dark:text-zinc-400'>
-                                        Accrued: {balance.accrued || 0} days ({balance.monthlyRate || 0}/month)
-                                    </p>
-                                    {balance.remaining < 0 && (
+                                    {balance.leaveType === 'annual' && (
+                                        <p className='text-xs text-zinc-500 dark:text-zinc-400'>
+                                            Accrued: {balance.accrued || 0} days ({balance.monthlyRate || 0}/month)
+                                        </p>
+                                    )}
+                                    {balance.remaining < 0 && balance.leaveType === 'annual' && (
                                         <p className='text-xs text-danger-500 font-medium'>
                                             Owing: {Math.abs(balance.remaining)} days from next month
                                         </p>
@@ -1032,9 +1034,11 @@ export default function LeaveRequests() {
                                                     days
                                                 </span>
                                             </div>
-                                            <p className='text-xs text-zinc-500 dark:text-zinc-400 mt-1'>
-                                                Accrued: {getBalance(formData.leaveType)?.accrued || 0} days ({getBalance(formData.leaveType)?.monthlyRate || 0}/month)
-                                            </p>
+                                            {formData.leaveType === 'annual' && (
+                                                <p className='text-xs text-zinc-500 dark:text-zinc-400 mt-1'>
+                                                    Accrued: {getBalance(formData.leaveType)?.accrued || 0} days ({getBalance(formData.leaveType)?.monthlyRate || 0}/month)
+                                                </p>
+                                            )}
                                             <p className='text-xs text-primary-500'>
                                                 Can request up to: {getBalance(formData.leaveType)?.canRequest || 0} days
                                             </p>

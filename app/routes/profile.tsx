@@ -366,10 +366,12 @@ export default function Profile() {
                                                     <p className="text-xs text-zinc-500">Used</p>
                                                 </div>
                                             </div>
-                                            <p className="text-xs text-zinc-500 mb-1">
-                                                Accrued: {balance.accrued || 0} days ({balance.monthlyRate || 0}/month)
-                                            </p>
-                                            {remaining < 0 && (
+                                            {balance.leaveType === 'annual' && (
+                                                <p className="text-xs text-zinc-500 mb-1">
+                                                    Accrued: {balance.accrued || 0} days ({balance.monthlyRate || 0}/month)
+                                                </p>
+                                            )}
+                                            {remaining < 0 && balance.leaveType === 'annual' && (
                                                 <p className="text-xs text-danger-500 font-medium mb-1">
                                                     Owing: {Math.abs(remaining)} days from next month
                                                 </p>

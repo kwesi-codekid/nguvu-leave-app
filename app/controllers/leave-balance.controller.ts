@@ -246,11 +246,12 @@ export class LeaveBalanceController {
 
             // Enhance with virtual fields and additional info
             const enhancedBalances = balances.map((balance) => {
-                // remaining = accrued + adjustments - used (can be negative if borrowed)
-                const remaining =
-                    (balance.accrued || 0) +
-                    (balance.adjustments || 0) -
-                    balance.used
+                // Annual leave: remaining = accrued + adjustments - used (can be negative if borrowed)
+                // Other types: remaining = allocated + adjustments - used (full allocation available)
+                const base = balance.leaveType === LeaveTypes.ANNUAL
+                    ? (balance.accrued || 0)
+                    : balance.allocated
+                const remaining = base + (balance.adjustments || 0) - balance.used
 
                 // Can request up to allocated - used (full allocation, not just accrued)
                 const availableForRequest = Math.max(0, balance.allocated - balance.used)
@@ -911,8 +912,10 @@ export class LeaveBalanceController {
             const newAdjustment = oldAdjustment + adjustment
 
             // Ensure total doesn't go negative
-            const totalAvailable =
-                (balance.accrued || 0) + newAdjustment - balance.used
+            const baseAmount = balance.leaveType === LeaveTypes.ANNUAL
+                ? (balance.accrued || 0)
+                : balance.allocated
+            const totalAvailable = baseAmount + newAdjustment - balance.used
             if (totalAvailable < 0) {
                 return errorResponseObject(
                     "Adjustment would result in negative balance"

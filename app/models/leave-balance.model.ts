@@ -64,7 +64,7 @@ const LeaveBalanceSchema = new Schema<any>(
             type: Number,
             default: 0,
             min: 0,
-            // Monthly accrual for all leave types
+            // Monthly accrual for annual leave; equals allocated for other types
         },
         used: {
             type: Number,
@@ -109,11 +109,12 @@ LeaveBalanceSchema.pre("save", function () {
     }
 })
 
-// Virtual for remaining balance (accrued - used for all types)
+// Virtual for remaining balance
 LeaveBalanceSchema.virtual("remaining").get(function () {
-    // remaining = accrued + adjustments - used
-    // Can be negative if user has used more than accrued (borrowed from future months)
-    return (this.accrued || 0) + (this.adjustments || 0) - this.used
+    // Annual leave: remaining = accrued + adjustments - used (can be negative if borrowed)
+    // Other types: remaining = allocated + adjustments - used (full allocation available immediately)
+    const base = this.leaveType === LeaveTypes.ANNUAL ? (this.accrued || 0) : this.allocated
+    return base + (this.adjustments || 0) - this.used
 })
 
 // Virtual for available for request (max requestable for all types)
@@ -192,10 +193,35 @@ LeaveBalanceSchema.methods.credit = async function (
     return await this.save()
 }
 
-// Instance method to update accrual (for all leave types)
+// Instance method to update accrual (monthly accrual only applies to annual leave)
 LeaveBalanceSchema.methods.updateAccrual = async function (
     asOfDate?: Date
 ): Promise<ILeaveBalance> {
+    // Non-annual leave types get their full cap immediately (no monthly accrual)
+    if (this.leaveType !== LeaveTypes.ANNUAL) {
+        const fullCap = LEAVE_CAPS[this.leaveType] || 0
+        let needsSave = false
+
+        // Ensure allocated matches the full cap
+        if (this.allocated !== fullCap) {
+            this.allocated = fullCap
+            needsSave = true
+        }
+
+        // Ensure accrued equals allocated
+        if ((this.accrued || 0) !== this.allocated) {
+            this.accrued = this.allocated
+            this.lastAccrualAt = new Date()
+            needsSave = true
+        }
+
+        if (needsSave) {
+            return await this.save()
+        }
+        return this
+    }
+
+    // Annual leave: monthly accrual logic
     const now = asOfDate || new Date()
     const periodStart = new Date(this.periodStart)
     const periodEnd = new Date(this.periodEnd)
@@ -214,7 +240,7 @@ LeaveBalanceSchema.methods.updateAccrual = async function (
     // Calculate total months in this period (for pro-rating partial periods)
     const totalPeriodMonths = getTotalMonthsInPeriod(periodStart, periodEnd)
 
-    // Monthly rate = allocated / totalPeriodMonths (works for all leave types)
+    // Monthly rate = allocated / totalPeriodMonths
     const monthlyRate = totalPeriodMonths > 0 ? this.allocated / totalPeriodMonths : 0
 
     // Max accrual = allocated (full period allocation)
@@ -250,16 +276,13 @@ LeaveBalanceSchema.methods.updateAccrual = async function (
 
 // Instance method to reset for new period
 LeaveBalanceSchema.methods.resetForNewPeriod = async function (): Promise<ILeaveBalance> {
-    // Calculate pro-rated allocation based on period length
     const totalPeriodMonths = getTotalMonthsInPeriod(this.periodStart, this.periodEnd)
-    const proRateFactor = totalPeriodMonths / 12
 
-    // Reset values for the new period
-    // Annual leave: months * 2.5 (no rounding, matches accrual rate)
-    // Other types: round to whole days
+    // Annual leave: pro-rated based on period length (accrues monthly)
+    // Other types: full cap allocation (available immediately)
     this.allocated = this.leaveType === LeaveTypes.ANNUAL
         ? totalPeriodMonths * 2.5
-        : Math.round((LEAVE_CAPS[this.leaveType] || 0) * proRateFactor)
+        : (LEAVE_CAPS[this.leaveType] || 0)
     this.used = 0
     this.adjustments = 0
     this.lastAccrualAt = undefined
@@ -290,13 +313,12 @@ LeaveBalanceSchema.statics.getOrCreate = async function (
     })
 
     if (!balance) {
-        // Calculate pro-rated allocation
+        // Annual leave: pro-rated based on period length (accrues monthly)
+        // Other types: full cap allocation (available immediately)
         const totalPeriodMonths = getTotalMonthsInPeriod(periodStart, periodEnd)
-        const proRateFactor = totalPeriodMonths / 12
-        // Annual leave: months * 2.5 (no rounding, matches accrual rate)
         const allocated = leaveType === LeaveTypes.ANNUAL
             ? totalPeriodMonths * 2.5
-            : Math.round((LEAVE_CAPS[leaveType] || 0) * proRateFactor)
+            : (LEAVE_CAPS[leaveType] || 0)
 
         balance = new this({
             staff: staffId,
@@ -312,7 +334,7 @@ LeaveBalanceSchema.statics.getOrCreate = async function (
         // Save first to create the record
         await balance.save()
 
-        // Initialize accrual based on period (for all leave types)
+        // Initialize accrual (annual: based on months worked; others: full allocation)
         await balance.updateAccrual()
     }
 
@@ -346,12 +368,13 @@ LeaveBalanceSchema.statics.initializeForStaff = async function (
     return balances
 }
 
-// Static method to process monthly accruals
+// Static method to process monthly accruals (only annual leave accrues monthly)
 LeaveBalanceSchema.statics.processMonthlyAccruals = async function (): Promise<number> {
     const now = new Date()
 
-    // Find all leave balances where the current date falls within the period
+    // Only annual leave balances accrue monthly
     const balances = await this.find({
+        leaveType: LeaveTypes.ANNUAL,
         periodStart: { $lte: now },
         periodEnd: { $gte: now },
     })
