@@ -236,18 +236,18 @@ callInSchema.methods.processCallIn = async function (): Promise<void> {
             throw new Error("Leave request not found")
         }
 
-        const currentYear = new Date().getFullYear()
-
-        // Find the leave balance for the staff
+        // Find the leave balance for the staff (period-based)
+        const now = new Date()
         const leaveBalance = await LeaveBalance.findOne({
             staff: doc.staff,
-            year: currentYear,
             leaveType: leaveRequest.leaveType,
+            periodStart: { $lte: now },
+            periodEnd: { $gte: now },
         })
 
         if (!leaveBalance) {
             throw new Error(
-                `Leave balance not found for staff ${doc.staff} for year ${currentYear}`
+                `Leave balance not found for staff ${doc.staff} for current period`
             )
         }
 

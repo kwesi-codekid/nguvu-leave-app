@@ -110,6 +110,7 @@ export class LeaveRequestController {
             // Date validation and computation
             if (startDate && (endDate || numberOfDays)) {
                 const start = new Date(startDate)
+                console.log(`[LeaveRequest] Validating dates: start=${startDate}, end=${actualEndDate}, startDay=${start.toDateString()}`)
                 
                 // Compute end date if numberOfDays provided
                 if (numberOfDays && !endDate && errors.length === 0) {
@@ -119,6 +120,7 @@ export class LeaveRequestController {
                         computedEndDate = true
                         console.log(`[LeaveRequest] Computed end date: ${actualEndDate} for ${numberOfDays} working days`)
                     } catch (error) {
+                        console.error(`[LeaveRequest] Error computing end date:`, error)
                         errors.push({
                             field: "numberOfDays",
                             message: "Failed to compute end date for the given number of days",
@@ -127,8 +129,10 @@ export class LeaveRequestController {
                 }
                 
                 const end = new Date(actualEndDate)
+                console.log(`[LeaveRequest] Validating dates: end=${actualEndDate}, endDay=${end.toDateString()}`)
 
                 if (isNaN(start.getTime())) {
+                    console.error(`[LeaveRequest] Invalid start date: ${startDate}`)
                     errors.push({
                         field: "startDate",
                         message: "Invalid start date format",
@@ -136,6 +140,7 @@ export class LeaveRequestController {
                 }
 
                 if (isNaN(end.getTime())) {
+                    console.error(`[LeaveRequest] Invalid end date: ${actualEndDate}`)
                     errors.push({
                         field: "endDate",
                         message: "Invalid end date format",
@@ -143,6 +148,7 @@ export class LeaveRequestController {
                 }
 
                 if (start > end) {
+                    console.error(`[LeaveRequest] Start date after end date: ${start} > ${end}`)
                     errors.push({
                         field: "endDate",
                         message:
@@ -153,6 +159,7 @@ export class LeaveRequestController {
                 // Check start date is current year or future
                 const currentYear = new Date().getFullYear()
                 if (start.getFullYear() < currentYear) {
+                    console.error(`[LeaveRequest] Start date in past year: ${start.getFullYear()} < ${currentYear}`)
                     errors.push({
                         field: "startDate",
                         message: "Leave start date cannot be in past years",
@@ -161,7 +168,9 @@ export class LeaveRequestController {
                 
                 // Check if start date is a weekend
                 const startDayOfWeek = start.getDay()
+                console.log(`[LeaveRequest] Start date day of week: ${startDayOfWeek} (0=Sunday, 6=Saturday)`)
                 if (startDayOfWeek === 0 || startDayOfWeek === 6) {
+                    console.error(`[LeaveRequest] Start date is weekend: ${startDayOfWeek}`)
                     errors.push({
                         field: "startDate",
                         message: "Leave cannot start on a weekend (Saturday or Sunday)",
@@ -170,7 +179,9 @@ export class LeaveRequestController {
                 
                 // Check if start date is a holiday
                 const isStartDateHoliday = await Holiday.isHoliday(start)
+                console.log(`[LeaveRequest] Is start date holiday? ${isStartDateHoliday}`)
                 if (isStartDateHoliday) {
+                    console.error(`[LeaveRequest] Start date is holiday: ${start}`)
                     errors.push({
                         field: "startDate",
                         message: "Leave cannot start on a public holiday",
@@ -179,7 +190,9 @@ export class LeaveRequestController {
                 
                 // Check if end date is a weekend
                 const endDayOfWeek = end.getDay()
+                console.log(`[LeaveRequest] End date day of week: ${endDayOfWeek} (0=Sunday, 6=Saturday)`)
                 if (endDayOfWeek === 0 || endDayOfWeek === 6) {
+                    console.error(`[LeaveRequest] End date is weekend: ${endDayOfWeek}`)
                     errors.push({
                         field: "endDate",
                         message: "Leave cannot end on a weekend (Saturday or Sunday)",
@@ -188,7 +201,9 @@ export class LeaveRequestController {
                 
                 // Check if end date is a holiday
                 const isEndDateHoliday = await Holiday.isHoliday(end)
+                console.log(`[LeaveRequest] Is end date holiday? ${isEndDateHoliday}`)
                 if (isEndDateHoliday) {
+                    console.error(`[LeaveRequest] End date is holiday: ${end}`)
                     errors.push({
                         field: "endDate",
                         message: "Leave cannot end on a public holiday",
@@ -233,6 +248,19 @@ export class LeaveRequestController {
                 )
             }
 
+            // Check leave dates do not exceed contract end date
+            if (activeContract.endDate) {
+                const contractEnd = new Date(activeContract.endDate)
+                contractEnd.setHours(23, 59, 59, 999)
+                const leaveEnd = new Date(actualEndDate)
+                if (leaveEnd > contractEnd) {
+                    if (session) await session.abortTransaction()
+                    return errorResponseObject(
+                        `Leave end date cannot exceed your contract end date (${contractEnd.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })})`
+                    )
+                }
+            }
+
             // Check document requirements
             if (LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(leaveType)) {
                 if (!attachments || attachments.length === 0) {
@@ -263,49 +291,62 @@ export class LeaveRequestController {
                 new Date(actualEndDate)
             )
 
+            console.log(`[LeaveRequest] Working days result:`, workingDaysResult)
+
             if (workingDaysResult.total === 0) {
+                console.error(`[LeaveRequest] No working days found in date range`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Selected dates contain no working days"
                 )
             }
 
-            // Check leave balance
-            const startYear = new Date(startDate).getFullYear()
+            // Check leave balance (period-based lookup)
+            const leaveStartDate = new Date(startDate)
+            console.log(`[LeaveRequest] Looking for balance for staff: ${user._id}, leaveType: ${leaveType}, date: ${leaveStartDate}`)
+            
             const balanceQuery = LeaveBalance.findOne({
                 staff: user._id,
-                year: startYear,
                 leaveType,
+                periodStart: { $lte: leaveStartDate },
+                periodEnd: { $gte: leaveStartDate },
             })
             const balance = session ? await balanceQuery.session(session) : await balanceQuery
 
+            console.log(`[LeaveRequest] Balance found:`, balance)
+
             if (!balance) {
+                console.error(`[LeaveRequest] No balance found for staff: ${user._id}, leaveType: ${leaveType}`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
-                    `No ${leaveType} balance found for year ${startYear}`
+                    `No ${leaveType} balance found for the current leave period`
                 )
             }
 
-            if (!balance.canRequest(workingDaysResult.total)) {
-                const available =
-                    leaveType === LeaveTypes.ANNUAL
-                        ? balance.availableForRequest
-                        : balance.remaining
+            const canRequest = balance.canRequest(workingDaysResult.total)
+            console.log(`[LeaveRequest] Can request ${workingDaysResult.total} days?`, canRequest)
+            console.log(`[LeaveRequest] Available for request: ${balance.availableForRequest}, Remaining: ${balance.remaining}`)
 
+            if (!canRequest) {
+                console.error(`[LeaveRequest] Insufficient balance. Available: ${balance.availableForRequest}, Requested: ${workingDaysResult.total}`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
-                    `Insufficient leave balance. Available: ${available} days, Requested: ${workingDaysResult.total} days`
+                    `Insufficient leave balance. Available: ${balance.availableForRequest} days, Requested: ${workingDaysResult.total} days`
                 )
             }
 
             // Check for overlapping requests
+            console.log(`[LeaveRequest] Checking for overlapping requests...`)
             const overlapping = await LeaveRequest.getOverlappingRequests(
                 user._id,
                 new Date(startDate),
                 new Date(actualEndDate)
             )
 
+            console.log(`[LeaveRequest] Overlapping requests found:`, overlapping)
+
             if (overlapping.length > 0) {
+                console.error(`[LeaveRequest] Found ${overlapping.length} overlapping requests`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "You have overlapping leave requests for the selected dates"
@@ -345,7 +386,7 @@ export class LeaveRequestController {
                 leaveType,
                 startDate: new Date(startDate),
                 endDate: new Date(actualEndDate),
-                startYear,
+                startYear: new Date(startDate).getFullYear(),
                 workingDays: workingDaysResult.total,
                 workingDaysBreakdown: workingDaysResult.breakdown,
                 status: LeaveStatus.PENDING,
@@ -612,7 +653,23 @@ export class LeaveRequestController {
                         "End date must be after or equal to start date"
                     )
                 }
-                
+
+                // Check leave dates do not exceed contract end date
+                const updateContract = await StaffContract.findOne({
+                    staff: request.staff,
+                    status: ContractStatus.ACTIVE,
+                })
+                if (updateContract?.endDate) {
+                    const contractEnd = new Date(updateContract.endDate)
+                    contractEnd.setHours(23, 59, 59, 999)
+                    if (newEndDate > contractEnd) {
+                        if (session) await session.abortTransaction()
+                        return errorResponseObject(
+                            `Leave end date cannot exceed your contract end date (${contractEnd.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })})`
+                        )
+                    }
+                }
+
                 // Check if new start date is a weekend
                 const startDayOfWeek = newStartDate.getDay()
                 if (startDayOfWeek === 0 || startDayOfWeek === 6) {
@@ -664,11 +721,12 @@ export class LeaveRequestController {
                         )
                     }
 
-                    // Re-check balance
+                    // Re-check balance (period-based)
                     const balance = await LeaveBalance.findOne({
                         staff: request.staff,
-                        year: newStartDate.getFullYear(),
                         leaveType: request.leaveType,
+                        periodStart: { $lte: newStartDate },
+                        periodEnd: { $gte: newStartDate },
                     }).session(session)
 
                     if (!balance?.canRequest(workingDaysResult.total)) {
@@ -2809,12 +2867,14 @@ export class LeaveRequestController {
                 leaveRequest = [newRequest]
             }
 
-            // Debit balance if not skipping validation
+            // Debit balance if not skipping validation (period-based)
             if (!skipValidation) {
+                const emergencyStartDate = new Date(startDate)
                 const balanceQuery = LeaveBalance.findOne({
                     staff: staffId,
-                    year: new Date(startDate).getFullYear(),
                     leaveType,
+                    periodStart: { $lte: emergencyStartDate },
+                    periodEnd: { $gte: emergencyStartDate },
                 })
                 const balance = session ? await balanceQuery.session(session) : await balanceQuery
 
@@ -2924,6 +2984,8 @@ export class LeaveRequestController {
         startDate: Date,
         endDate: Date
     ): Promise<{ total: number; breakdown: any; skippedHolidays?: string[] }> {
+        console.log(`[LeaveRequest] Calculating working days from ${startDate.toDateString()} to ${endDate.toDateString()}`)
+        
         const breakdown: any = {}
         let total = 0
         const skippedHolidays: string[] = []
@@ -2934,19 +2996,25 @@ export class LeaveRequestController {
 
         while (currentDate <= normalizedEndDate) {
             const year = currentDate.getFullYear()
+            const dayOfWeek = currentDate.getDay()
+            console.log(`[LeaveRequest] Checking date: ${currentDate.toDateString()}, dayOfWeek: ${dayOfWeek}`)
 
             // Skip weekends
-            const dayOfWeek = currentDate.getDay()
             if (dayOfWeek !== 0 && dayOfWeek !== 6) {
                 // Check if it's a holiday
                 const isHoliday = await Holiday.isHoliday(currentDate)
+                console.log(`[LeaveRequest] Is ${currentDate.toDateString()} a holiday? ${isHoliday}`)
 
                 if (isHoliday) {
                     skippedHolidays.push(currentDate.toISOString().split('T')[0])
+                    console.log(`[LeaveRequest] Skipping holiday: ${currentDate.toDateString()}`)
                 } else {
                     breakdown[year] = (breakdown[year] || 0) + 1
                     total++
+                    console.log(`[LeaveRequest] Counted working day: ${currentDate.toDateString()}, total: ${total}`)
                 }
+            } else {
+                console.log(`[LeaveRequest] Skipping weekend: ${currentDate.toDateString()}`)
             }
 
             currentDate.setDate(currentDate.getDate() + 1)
@@ -2956,6 +3024,7 @@ export class LeaveRequestController {
             console.log(`[LeaveRequest] Skipped ${skippedHolidays.length} holiday(s): ${skippedHolidays.join(', ')}`)
         }
 
+        console.log(`[LeaveRequest] Final working days count: ${total}`)
         return { total, breakdown, skippedHolidays }
     }
 

@@ -325,7 +325,7 @@ export default function Profile() {
                 <div>
                     <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
                         <TrendingUp className="size-5 text-primary" />
-                        Leave Balances ({new Date().getFullYear()})
+                        Leave Balances ({balancesData?.data?.summary?.periodLabel || new Date().getFullYear()})
                     </h3>
                     {balancesLoading ? (
                         <div className="flex justify-center py-8">
@@ -342,9 +342,10 @@ export default function Profile() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                             {leaveBalances.map((balance: any) => {
                                 const used = balance.used || 0
-                                const entitled = balance.entitled || 0
-                                const available = entitled - used
-                                const percentage = entitled > 0 ? (used / entitled) * 100 : 0
+                                const allocated = balance.allocated || 0
+                                const remaining = balance.remaining ?? 0
+                                const canRequestDays = balance.availableForRequest ?? Math.max(0, allocated - used)
+                                const percentage = allocated > 0 ? (used / allocated) * 100 : 0
 
                                 return (
                                     <Card key={balance._id} className="bg-content1">
@@ -357,14 +358,27 @@ export default function Profile() {
                                             </div>
                                             <div className="flex justify-between items-end mb-2">
                                                 <div>
-                                                    <p className="text-2xl font-bold">{available}</p>
-                                                    <p className="text-xs text-zinc-500">Available</p>
+                                                    <p className={`text-2xl font-bold ${remaining < 0 ? 'text-danger-500' : ''}`}>{remaining}</p>
+                                                    <p className="text-xs text-zinc-500">Balance</p>
                                                 </div>
                                                 <div className="text-right">
-                                                    <p className="text-sm text-zinc-500">{used} / {entitled}</p>
+                                                    <p className="text-sm text-zinc-500">{used} / {allocated}</p>
                                                     <p className="text-xs text-zinc-500">Used</p>
                                                 </div>
                                             </div>
+                                            <p className="text-xs text-zinc-500 mb-1">
+                                                Accrued: {balance.accrued || 0} days ({balance.monthlyRate || 0}/month)
+                                            </p>
+                                            {remaining < 0 && (
+                                                <p className="text-xs text-danger-500 font-medium mb-1">
+                                                    Owing: {Math.abs(remaining)} days from next month
+                                                </p>
+                                            )}
+                                            {canRequestDays > 0 && (
+                                                <p className="text-xs text-primary-500 mb-1">
+                                                    Can request up to: {canRequestDays} days
+                                                </p>
+                                            )}
                                             <Progress
                                                 value={percentage}
                                                 size="sm"

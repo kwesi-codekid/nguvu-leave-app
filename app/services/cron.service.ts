@@ -3,7 +3,6 @@ import Staff from "../models/staff.model"
 import StaffContract from "../models/staff-contract.model"
 import LeaveBalance from "../models/leave-balance.model"
 import { AccountStatus, ContractStatus } from "../utils/types"
-// import { EmailQueueService } from "./email-queue.service"
 
 /**
  * CronService handles all scheduled jobs for the leave management system
@@ -15,8 +14,7 @@ export class CronService {
     static init(): void {
         console.log("Initializing cron jobs...")
         this.scheduleLeaveAccumulation()
-        this.scheduleYearEndReset()
-        // this.scheduleEmailQueueProcessing()
+        this.scheduleContractAnniversaryCheck()
     }
 
     /**
@@ -25,23 +23,12 @@ export class CronService {
      */
     private static scheduleLeaveAccumulation(): void {
         // Schedule job to run on the first day of each month
-        // Cron format: minute hour day month day-of-week
-        // '0 0 1 * *' means run at midnight on the first day of each month
         cron.schedule("0 0 1 * *", async () => {
             try {
-                // console.log(
-                //   "[Cron]] Running leave accumulation job on first day of month:",
-                //   new Date().toISOString()
-                // );
-
                 // Find all active staff with active contracts
                 const activeStaff = await Staff.find({
                     status: AccountStatus.ACTIVE,
                 })
-
-                // console.log(
-                //   `[Cron]] Processing leave accumulation for ${activeStaff.length} active staff`
-                // );
 
                 let updatedCount = 0
                 let errorCount = 0
@@ -64,28 +51,29 @@ export class CronService {
                             continue
                         }
 
-                        // Find the staff's annual leave balance for current year
-                        const currentYear = new Date().getFullYear()
+                        // Find the staff's annual leave balance for current period
+                        const now = new Date()
                         const leaveBalance = await LeaveBalance.findOne({
                             staff: staff._id,
-                            year: currentYear,
                             leaveType: "annual",
+                            periodStart: { $lte: now },
+                            periodEnd: { $gte: now },
                         })
 
                         if (!leaveBalance) {
                             console.error(
-                                `[Cron]] No annual leave balance found for staff: ${staff._id} (${staff.name})`
+                                `[Cron] No annual leave balance found for staff: ${staff._id} (${staff.name}) in current period`
                             )
                             errorCount++
                             continue
                         }
 
-                        // Update annual leave accrual (will now consider contract start date)
+                        // Update annual leave accrual (period-based)
                         await leaveBalance.updateAccrual()
                         updatedCount++
                     } catch (error) {
                         console.error(
-                            `[Cron]] Error updating leave balance for staff ${staff._id}:`,
+                            `[Cron] Error updating leave balance for staff ${staff._id}:`,
                             error
                         )
                         errorCount++
@@ -96,7 +84,7 @@ export class CronService {
                     `[Cron] Leave accumulation complete. Updated: ${updatedCount}, Skipped (no contract): ${skippedCount}, Errors: ${errorCount}`
                 );
             } catch (error) {
-                console.error("[Cron]] Error in leave accumulation job:", error)
+                console.error("[Cron] Error in leave accumulation job:", error)
             }
         })
 
@@ -106,83 +94,35 @@ export class CronService {
     }
 
     /**
-     * Schedule the job to reset yearly leave balances
-     * This runs on January 1st of each year to reset leave balances and handle accrual
+     * Schedule the daily job to check for contract anniversaries
+     * Replaces the Jan 1st year-end reset with a daily check that creates
+     * new period balances when a staff member's contract anniversary arrives
      */
-    private static scheduleYearEndReset(): void {
-        // Schedule job to run at midnight on January 1st
-        // Cron format: minute hour day month day-of-week
-        cron.schedule("0 0 1 1 *", async () => {
+    private static scheduleContractAnniversaryCheck(): void {
+        // Schedule job to run daily at midnight
+        cron.schedule("0 0 * * *", async () => {
             try {
-                // console.log(
-                //   "[Cron]] Running year-end leave balance reset:",
-                //   new Date().toISOString()
-                // );
+                // Use the model's createNewPeriodBalances which:
+                // 1. Gets all active contracts
+                // 2. Computes current period for each
+                // 3. Creates balances if they don't exist for the new period
+                const newPeriodCount = await LeaveBalance.createNewPeriodBalances()
 
-                // Reset all leave balances for the new year
-                const nextYear = new Date().getFullYear()
-                const resetCount = await LeaveBalance.resetAllForNewYear(
-                    nextYear
-                )
-
-                console.log(
-                    `[Cron]] Year-end leave balance reset complete. Reset count: ${resetCount}`
-                )
+                if (newPeriodCount > 0) {
+                    console.log(
+                        `[Cron] Contract anniversary check complete. New period balances created for ${newPeriodCount} staff`
+                    )
+                }
             } catch (error) {
                 console.error(
-                    "[Cron]] Error in year-end leave reset job:",
+                    "[Cron] Error in contract anniversary check job:",
                     error
                 )
             }
         })
 
         console.log(
-            "Year-end leave balance reset job scheduled to run on January 1st"
+            "Contract anniversary check job scheduled to run daily at midnight"
         )
     }
-
-    /**
-     * Schedule the job to process the email queue
-     * This runs every 2 minutes to send pending emails
-     */
-    // private static scheduleEmailQueueProcessing(): void {
-    //     // Schedule job to run every 2 minutes
-    //     // Cron format: minute hour day month day-of-week
-    //     cron.schedule("*/2 * * * *", async () => {
-    //         try {
-    //             const timestamp = new Date().toISOString()
-    //             // console.log(
-    //             //   `[Cron]] [${timestamp}] Starting email queue processing job`
-    //             // );
-
-    //             // Check for pending emails before processing
-    //             const pendingCount =
-    //                 await EmailQueueService.getPendingEmailCount()
-    //             // console.log(
-    //             //   `[Cron]] Found ${pendingCount} pending emails in queue before processing`
-    //             // );
-
-    //             if (pendingCount === 0) {
-    //                 console.log(
-    //                     "[Cron]] No pending emails to process, skipping processing"
-    //                 )
-    //                 return
-    //             }
-
-    //             // Call the email queue service to process pending emails
-    //             // console.log("[Cron]] Calling EmailQueueService.processEmailQueue()...");
-    //             const result = await EmailQueueService.processEmailQueue()
-
-    //             // console.log(
-    //             //   `[Cron]] Email queue processing complete. Sent: ${result.sent}, Failed: ${result.failed}, Pending: ${result.pending}`
-    //             // );
-    //         } catch (error) {
-    //             console.error("[Cron]] Error processing email queue:", error)
-    //         }
-    //     })
-
-    //     console.log(
-    //         "Email queue processing job scheduled to run every 2 minutes"
-    //     )
-    // }
 }
