@@ -195,12 +195,12 @@ export default function AppLayout({
                         >
                             <div className='flex justify-center items-center gap-2 w-full'>
                                 <div className=''>
-                                    <Image
+                                    {/* <Image
                                         src={logo}
                                         className='size-9 object-cover border border-slate-400 bg-white mt-1'
                                         shadow='sm'
                                         radius='sm'
-                                    />
+                                    /> */}
                                 </div>
 
                                 {!isCollapsed && (

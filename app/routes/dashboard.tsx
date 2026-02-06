@@ -142,6 +142,7 @@ function DashboardSkeleton() {
 
 // KPI Card Component
 function KPICard({
+    className,
     title,
     value,
     subtitle,
@@ -149,6 +150,7 @@ function KPICard({
     trend,
     color = "default",
 }: {
+    className?: string
     title: string
     value: string | number
     subtitle?: string
