@@ -98,13 +98,13 @@ export class AIService {
                 throw new Error("Staff not found")
             }
 
-            const currentYear = new Date().getFullYear()
-
-            // Get staff's leave balance
+            // Get staff's leave balance (period-based)
+            const now = new Date()
             const balance = await LeaveBalance.findOne({
                 staff: staffId,
-                year: currentYear,
                 leaveType,
+                periodStart: { $lte: now },
+                periodEnd: { $gte: now },
             }).lean()
 
             // Get upcoming holidays
@@ -835,7 +835,7 @@ Keep it concise (2-4 sentences).`
                 }),
                 Holiday.find().select("name startDate type").lean(),
                 LeaveBalance.aggregate([
-                    { $match: { year: currentYear } },
+                    { $match: { periodStart: { $lte: new Date() }, periodEnd: { $gte: new Date() } } },
                     {
                         $group: {
                             _id: "$leaveType",

@@ -454,11 +454,13 @@ export class CallInController {
                 if (newWorkingDays !== oldWorkingDays) {
                     updates.workingDaysRecovered = newWorkingDays
 
-                    // Adjust balance
+                    // Adjust balance (period-based)
+                    const balanceDate = new Date()
                     const balance = await LeaveBalance.findOne({
                         staff: (callIn.staff as any)._id,
-                        year: new Date().getFullYear(),
                         leaveType: leaveRequest.leaveType,
+                        periodStart: { $lte: balanceDate },
+                        periodEnd: { $gte: balanceDate },
                     }).session(session)
 
                     if (balance) {
@@ -638,11 +640,13 @@ export class CallInController {
                 )
             }
 
-            // Reverse balance credit
+            // Reverse balance credit (period-based)
+            const cancelDate = new Date()
             const balance = await LeaveBalance.findOne({
                 staff: callIn.staff,
-                year: new Date().getFullYear(),
                 leaveType: (callIn.leaveRequest as any).leaveType,
+                periodStart: { $lte: cancelDate },
+                periodEnd: { $gte: cancelDate },
             }).session(session)
 
             if (balance) {
@@ -2224,11 +2228,13 @@ export class CallInController {
 
             for (const callIn of recentCallIns) {
                 try {
-                    // Check if already processed by looking at balance
+                    // Check if already processed by looking at balance (period-based)
+                    const checkDate = new Date()
                     const balance = await LeaveBalance.findOne({
                         staff: callIn.staff,
-                        year: new Date().getFullYear(),
                         leaveType: (callIn.leaveRequest as any).leaveType,
+                        periodStart: { $lte: checkDate },
+                        periodEnd: { $gte: checkDate },
                     })
 
                     // Check if the balance notes mention this call-in
@@ -2296,11 +2302,13 @@ export class CallInController {
                 return errorResponseObject("Leave request not found")
             }
 
-            // Get current balance
+            // Get current balance (period-based)
+            const previewDate = new Date()
             const balance = await LeaveBalance.findOne({
                 staff: (leaveRequest.staff as any)._id,
-                year: new Date().getFullYear(),
                 leaveType: leaveRequest.leaveType,
+                periodStart: { $lte: previewDate },
+                periodEnd: { $gte: previewDate },
             })
 
             // Calculate potential impact

@@ -19,6 +19,7 @@ import {
     Gender,
     LEAVE_CAPS,
 } from "../utils/types"
+import { getContractPeriod, formatPeriod, getTotalMonthsInPeriod } from "../utils/contract-period"
 
 export class StaffContractController {
     /**
@@ -206,7 +207,7 @@ export class StaffContractController {
             if (initialStatus === ContractStatus.ACTIVE) {
                 await this.initializeLeaveBalances(
                     staff,
-                    contractStartDate.getFullYear(),
+                    { startDate: contractStartDate, endDate: endDate ? new Date(endDate) : null },
                     staffMember.gender
                 )
             }
@@ -507,10 +508,9 @@ export class StaffContractController {
             await contract.save()
 
             // Initialize leave balances
-            const currentYear = new Date().getFullYear()
             await this.initializeLeaveBalances(
                 (contract.staff as any)._id,
-                currentYear,
+                { startDate: contract.startDate, endDate: contract.endDate },
                 (contract.staff as any).gender
             )
 
@@ -631,10 +631,12 @@ export class StaffContractController {
                 .populate("position", "title")
                 .populate("terminatedBy", "name")
 
-            // Generate leave summary
+            // Generate leave summary (period-based)
+            const now = new Date()
             const leaveBalances = await LeaveBalance.find({
                 staff: (contract.staff as any)._id,
-                year: new Date().getFullYear(),
+                periodStart: { $lte: now },
+                periodEnd: { $gte: now },
             })
 
             const leaveSummary = leaveBalances.map((balance) => ({
@@ -822,15 +824,11 @@ export class StaffContractController {
 
                 newContract = await StaffContract.create(contractData)
 
-                // If new year and active, initialize leave balances
-                if (
-                    contractData.status === ContractStatus.ACTIVE &&
-                    newStartDate.getFullYear() !==
-                        currentContract.startDate.getFullYear()
-                ) {
+                // If active, initialize leave balances for new contract period
+                if (contractData.status === ContractStatus.ACTIVE) {
                     await this.initializeLeaveBalances(
                         (currentContract.staff as any)._id,
-                        newStartDate.getFullYear(),
+                        { startDate: newStartDate, endDate: renewalEndDate || null },
                         (currentContract.staff as any).gender
                     )
                 }
@@ -1150,10 +1148,12 @@ export class StaffContractController {
                 delete (contract as any).currency
             }
 
-            // Get leave balance summary
+            // Get leave balance summary (period-based)
+            const currentDate = new Date()
             const leaveBalances = await LeaveBalance.find({
                 staff: staffId,
-                year: new Date().getFullYear(),
+                periodStart: { $lte: currentDate },
+                periodEnd: { $gte: currentDate },
             }).select("leaveType remaining availableForRequest")
 
             const contractWithDetails = {
@@ -1170,10 +1170,7 @@ export class StaffContractController {
                     : null,
                 leaveBalances: leaveBalances.map((balance) => ({
                     type: balance.leaveType,
-                    available:
-                        balance.leaveType === LeaveTypes.ANNUAL
-                            ? balance.availableForRequest
-                            : balance.remaining,
+                    available: balance.availableForRequest,
                 })),
             }
 
@@ -2481,26 +2478,43 @@ export class StaffContractController {
      */
     private static async initializeLeaveBalances(
         staffId: string,
-        year: number,
+        contract: { startDate: Date; endDate?: Date | null },
         gender: Gender
     ): Promise<void> {
         try {
-            // Check if balances already exist for this year
-            const existingBalances = await LeaveBalance.find({
-                staff: staffId,
-                year,
-            })
+            // Get the current period from contract dates
+            const period = getContractPeriod(
+                { startDate: contract.startDate, endDate: contract.endDate },
+                new Date()
+            )
 
-            if (existingBalances.length > 0) {
+            if (!period) {
                 console.log(
-                    `Leave balances already exist for staff ${staffId} in year ${year}`
+                    `Cannot determine period for staff ${staffId} - contract may not be active yet`
                 )
                 return
             }
 
-            // Get current date for pro-rating
-            const currentDate = new Date()
-            const isCurrentYear = currentDate.getFullYear() === year
+            const normalizedStart = new Date(period.periodStart)
+            normalizedStart.setHours(0, 0, 0, 0)
+
+            // Check if balances already exist for this period
+            const existingBalances = await LeaveBalance.find({
+                staff: staffId,
+                periodStart: normalizedStart,
+            })
+
+            if (existingBalances.length > 0) {
+                console.log(
+                    `Leave balances already exist for staff ${staffId} in period ${formatPeriod(period.periodStart, period.periodEnd)}`
+                )
+                return
+            }
+
+            // Calculate pro-rated allocation
+            const totalPeriodMonths = getTotalMonthsInPeriod(period.periodStart, period.periodEnd)
+            const proRateFactor = totalPeriodMonths / 12
+            const periodLabel = formatPeriod(period.periodStart, period.periodEnd)
 
             // Initialize leave types based on configuration
             const leaveTypesToCreate = []
@@ -2508,74 +2522,76 @@ export class StaffContractController {
             // Annual leave - accrues monthly
             leaveTypesToCreate.push({
                 staff: staffId,
-                year,
+                periodStart: normalizedStart,
+                periodEnd: period.periodEnd,
                 leaveType: LeaveTypes.ANNUAL,
-                allocated: 30, // Max annual leave
-                accrued: 0, // Will accrue monthly
+                allocated: totalPeriodMonths * 2.5,
+                accrued: 0,
                 used: 0,
                 adjustments: 0,
-                notes: "Initialized with contract activation",
+                notes: `Initialized with contract activation for period ${periodLabel}`,
             })
 
             // Sick leave
             leaveTypesToCreate.push({
                 staff: staffId,
-                year,
+                periodStart: normalizedStart,
+                periodEnd: period.periodEnd,
                 leaveType: LeaveTypes.SICK,
-                allocated: LEAVE_CAPS[LeaveTypes.SICK],
+                allocated: Math.round(LEAVE_CAPS[LeaveTypes.SICK] * proRateFactor),
                 used: 0,
-                notes: "Initialized with contract activation",
+                notes: `Initialized with contract activation for period ${periodLabel}`,
             })
 
             // Bereavement leave
             leaveTypesToCreate.push({
                 staff: staffId,
-                year,
+                periodStart: normalizedStart,
+                periodEnd: period.periodEnd,
                 leaveType: LeaveTypes.BEREAVEMENT,
-                allocated: LEAVE_CAPS[LeaveTypes.BEREAVEMENT],
+                allocated: Math.round(LEAVE_CAPS[LeaveTypes.BEREAVEMENT] * proRateFactor),
                 used: 0,
-                notes: "Initialized with contract activation",
+                notes: `Initialized with contract activation for period ${periodLabel}`,
             })
 
             // Gender-specific leave
             if (gender === Gender.MALE) {
                 leaveTypesToCreate.push({
                     staff: staffId,
-                    year,
+                    periodStart: normalizedStart,
+                    periodEnd: period.periodEnd,
                     leaveType: LeaveTypes.PATERNITY,
-                    allocated: LEAVE_CAPS[LeaveTypes.PATERNITY],
+                    allocated: Math.round(LEAVE_CAPS[LeaveTypes.PATERNITY] * proRateFactor),
                     used: 0,
-                    notes: "Initialized with contract activation",
+                    notes: `Initialized with contract activation for period ${periodLabel}`,
                 })
             } else if (gender === Gender.FEMALE) {
                 leaveTypesToCreate.push({
                     staff: staffId,
-                    year,
+                    periodStart: normalizedStart,
+                    periodEnd: period.periodEnd,
                     leaveType: LeaveTypes.MATERNITY,
-                    allocated: LEAVE_CAPS[LeaveTypes.MATERNITY],
+                    allocated: Math.round(LEAVE_CAPS[LeaveTypes.MATERNITY] * proRateFactor),
                     used: 0,
-                    notes: "Initialized with contract activation",
+                    notes: `Initialized with contract activation for period ${periodLabel}`,
                 })
             }
 
             // Create all leave balances
             await LeaveBalance.insertMany(leaveTypesToCreate)
 
-            // If current year, update annual leave accrual
-            if (isCurrentYear) {
-                const annualBalance = await LeaveBalance.findOne({
-                    staff: staffId,
-                    year,
-                    leaveType: LeaveTypes.ANNUAL,
-                })
+            // Update accrual for all leave types
+            const createdBalances = await LeaveBalance.find({
+                staff: staffId,
+                periodStart: normalizedStart,
+            })
 
-                if (annualBalance) {
-                    await annualBalance.updateAccrual(currentDate)
-                }
+            for (const balance of createdBalances) {
+                await balance.updateAccrual(new Date())
             }
 
             console.log(
-                `Initialized leave balances for staff ${staffId} in year ${year}`
+                `Initialized leave balances for staff ${staffId} in period ${periodLabel}`
             )
         } catch (error) {
             console.error("Error initializing leave balances:", error)

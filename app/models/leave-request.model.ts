@@ -317,20 +317,24 @@ LeaveRequestSchema.methods.validateRequest = async function (): Promise<void> {
     // Get staff ID (handle both populated and non-populated staff field)
     const staffId = this.staff._id ? this.staff._id.toString() : this.staff.toString()
 
-    // Check balance availability
-    const balance = await LeaveBalance.getOrCreate(
-        staffId,
-        this.startYear,
-        this.leaveType
-    )
+    // Check balance availability (period-based lookup)
+    const leaveStartDate = new Date(this.startDate)
+    const balance = await LeaveBalance.findOne({
+        staff: staffId,
+        leaveType: this.leaveType,
+        periodStart: { $lte: leaveStartDate },
+        periodEnd: { $gte: leaveStartDate },
+    })
+
+    if (!balance) {
+        throw new Error(
+            `No ${this.leaveType} balance found for the current leave period`
+        )
+    }
 
     if (!balance.canRequest(this.workingDays)) {
         throw new Error(
-            `Insufficient leave balance. Available: ${
-                this.leaveType === LeaveTypes.ANNUAL
-                    ? balance.availableForRequest
-                    : balance.remaining
-            } days, Requested: ${this.workingDays} days`
+            `Insufficient leave balance. Available: ${balance.availableForRequest} days, Requested: ${this.workingDays} days`
         )
     }
 
@@ -368,12 +372,18 @@ LeaveRequestSchema.methods.endorse = async function (
         // Get staff ID (handle both populated and non-populated staff field)
         const staffId = this.staff._id ? this.staff._id.toString() : this.staff.toString()
 
-        // Debit balance
-        const balance = await LeaveBalance.getOrCreate(
-            staffId,
-            this.startYear,
-            this.leaveType
-        )
+        // Debit balance (period-based lookup)
+        const leaveStartDate = new Date(this.startDate)
+        const balance = await LeaveBalance.findOne({
+            staff: staffId,
+            leaveType: this.leaveType,
+            periodStart: { $lte: leaveStartDate },
+            periodEnd: { $gte: leaveStartDate },
+        })
+
+        if (!balance) {
+            throw new Error(`No ${this.leaveType} balance found for the current leave period`)
+        }
 
         await balance.debit(
             this.workingDays,
@@ -423,12 +433,18 @@ LeaveRequestSchema.methods.approve = async function (
     // Get staff ID (handle both populated and non-populated staff field)
     const staffId = this.staff._id ? this.staff._id.toString() : this.staff.toString()
 
-    // Debit balance
-    const balance = await LeaveBalance.getOrCreate(
-        staffId,
-        this.startYear,
-        this.leaveType
-    )
+    // Debit balance (period-based lookup)
+    const leaveStartDate = new Date(this.startDate)
+    const balance = await LeaveBalance.findOne({
+        staff: staffId,
+        leaveType: this.leaveType,
+        periodStart: { $lte: leaveStartDate },
+        periodEnd: { $gte: leaveStartDate },
+    })
+
+    if (!balance) {
+        throw new Error(`No ${this.leaveType} balance found for the current leave period`)
+    }
 
     await balance.debit(
         this.workingDays,
@@ -495,12 +511,18 @@ LeaveRequestSchema.methods.cancel = async function (
     // Get staff ID (handle both populated and non-populated staff field)
     const staffId = this.staff._id ? this.staff._id.toString() : this.staff.toString()
 
-    // Credit back the balance
-    const balance = await LeaveBalance.getOrCreate(
-        staffId,
-        this.startYear,
-        this.leaveType
-    )
+    // Credit back the balance (period-based lookup)
+    const leaveStartDate = new Date(this.startDate)
+    const balance = await LeaveBalance.findOne({
+        staff: staffId,
+        leaveType: this.leaveType,
+        periodStart: { $lte: leaveStartDate },
+        periodEnd: { $gte: leaveStartDate },
+    })
+
+    if (!balance) {
+        throw new Error(`No ${this.leaveType} balance found for the current leave period`)
+    }
 
     await balance.credit(
         this.workingDays,

@@ -117,14 +117,14 @@ export default function AppLayout({
                 <Tooltip content={label} placement='right'>
                     <NavLink
                         to={to as string}
-                        className={`flex items-center justify-center rounded-lg p-2 ${isActive ? "bg-gray-200 dark:bg-zinc-800" : ""
+                        className={`flex items-center justify-center rounded-lg p-2 ${isActive ? "bg-warning-800 !text-white dark:bg-zinc-800" : ""
                             }`}
                         onClick={onClick}
                     >
                         <div
                             className={`${isActive
                                     ? "text-zinc-900"
-                                    : "text-zinc-600 hover:text-zinc-900"
+                                    : " hover:text-zinc-900"
                                 } transition-all duration-300`}
                         >
                             {icon}
@@ -143,12 +143,12 @@ export default function AppLayout({
         const navLink = (
             <NavLink
                 to={to as string}
-                className={`flex items-center justify-between gap-3 rounded-lg px-2 py-2 ${isActive ? "bg-warning/70 dark:bg-warning/70 !text-white" : ""
+                className={`flex items-center justify-between gap-3 rounded-lg px-2 py-2 ${isActive ? "bg-warning-800 dark:bg-warning/70 !text-white" : ""
                     }`}
                 onClick={onClick}
             >
                 <div
-                    className={`flex ${isActive ? "text-text-white/10" : "text-zinc-400 hover:text-zinc-600"
+                    className={`flex ${isActive ? "text-text-white/10" : " hover:text-zinc-600"
                         } items-center gap-2 flex-1 transition-all duration-300`}
                 >
                     {icon}
@@ -183,7 +183,7 @@ export default function AppLayout({
                         width: isCollapsed ? "5rem" : "16rem",
                         transition: { duration: 0.3 },
                     }}
-                    className={`hidden lg:block h-screen bg-white dark:bg-zinc-950 dark:border-r-2 dark:border-zinc-800 p-4 overflow-hidden`}
+                    className={`hidden lg:block h-screen bg-warning dark:bg-zinc-950 dark:border-r-2 dark:border-zinc-800 p-4 overflow-hidden`}
                 >
                     <div className='flex flex-col justify-between h-full'>
                         {/* logo and name */}
@@ -195,12 +195,12 @@ export default function AppLayout({
                         >
                             <div className='flex justify-center items-center gap-2 w-full'>
                                 <div className=''>
-                                    <Image
+                                    {/* <Image
                                         src={logo}
                                         className='size-9 object-cover border border-slate-400 bg-white mt-1'
                                         shadow='sm'
                                         radius='sm'
-                                    />
+                                    /> */}
                                 </div>
 
                                 {!isCollapsed && (
@@ -250,9 +250,9 @@ export default function AppLayout({
             </SideDrawer>
 
             {/* page content */}
-            <div className='flex-1 flex flex-col h-full overflow-y-auto vertical-scrollbar bg-gray-100 dark:bg-zinc-950'>
+            <div className='flex-1 flex flex-col h-full overflow-y-auto vertical-scrollbar  dark:bg-zinc-950'>
                 {/* top navbar */}
-                <header className='h-14 w-full dark:border-b-2 dark:border-zinc-800 bg-white dark:bg-zinc-950 sticky top-0 z-50 px-4 shadow-md shadow-zinc-300/10 dark:shadow-zinc-800/10 rounded-tl-lg'>
+                <header className='h-14 w-full dark:border-b-2 dark:border-zinc-800 bg-white dark:bg-zinc-950 sticky top-0 z-50 px-4  border-b-2 border-warning/70 dark:shadow-zinc-800/10 rounded-tl-lg'>
                     <div className='2xl:mx-auto 2xl:max-w-[90rem] h-14 flex items-center justify-between'>
                         <div className='flex items-center gap-4'>
                             {/* Mobile menu toggle - only visible on small screens */}
@@ -303,7 +303,7 @@ export default function AppLayout({
                     </div>
                 </header>
                 {/* main content */}
-                <main className='flex-1 w-full 2xl:mx-auto 2xl:max-w-[90rem] p-4 relative rounded rounded-tl-lg'>
+                <main className='flex-1 w-full 2xl:mx-auto 2xl:max-w-[90rem]  p-4 relative rounded rounded-tl-lg'>
                     {pageLoading || navigation.state === "loading" ? (
                         <div className='absolute inset-0 flex items-center justify-center'>
                             <div className='animate-spin rounded-full h-8 w-8 border-b-2 border-warning'></div>

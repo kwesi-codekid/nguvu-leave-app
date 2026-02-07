@@ -265,9 +265,11 @@ export type Companies = string
 export interface LeaveBalanceInterface {
     _id?: string
     staff: string // Staff ID reference
-    year: number
+    year: number // Derived from periodStart.getFullYear()
+    periodStart: Date // Start of the contract-based leave period
+    periodEnd: Date // End of the contract-based leave period
     leaveType: LeaveTypes
-    allocated: number // Max allowed for the year (30 for annual, caps for others)
+    allocated: number // Max allowed for the period (pro-rated if partial period)
     accrued?: number // For annual leave only - actual accrued amount
     used: number // Days taken
     adjustments?: number // For annual leave only - manual adjustments

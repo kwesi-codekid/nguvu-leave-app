@@ -121,10 +121,11 @@ export class DashboardController {
                 })
             }
 
-            // Low balance alerts (annual leave < 3 days)
+            // Low balance alerts (annual leave < 3 days) - period-based
             const lowBalanceAlerts = await LeaveBalance.find({
-                year: currentYear,
                 leaveType: LeaveTypes.ANNUAL,
+                periodStart: { $lte: today },
+                periodEnd: { $gte: today },
                 remaining: { $lte: 3 },
             })
                 .populate("staff", "name staffId department")
@@ -398,10 +399,11 @@ export class DashboardController {
                 }
             }
 
-            // Low balance alerts for team
+            // Low balance alerts for team (period-based)
             const lowBalances = await LeaveBalance.find({
-                year: today.getFullYear(),
                 leaveType: LeaveTypes.ANNUAL,
+                periodStart: { $lte: today },
+                periodEnd: { $gte: today },
                 remaining: { $lte: 3 },
             })
                 .populate({
@@ -544,10 +546,11 @@ export class DashboardController {
                 return errorResponseObject("Staff member not found")
             }
 
-            // Get all balances for current year
+            // Get all balances for current period
             const balances = await LeaveBalance.find({
                 staff: user._id,
-                year: currentYear,
+                periodStart: { $lte: today },
+                periodEnd: { $gte: today },
             }).lean()
 
             // Format balances
@@ -558,10 +561,7 @@ export class DashboardController {
                 remaining: b.remaining,
                 accrued: b.accrued,
                 adjustment: (b as any).adjustment || b.adjustments || 0,
-                availableForRequest:
-                    b.leaveType === LeaveTypes.ANNUAL
-                        ? b.availableForRequest
-                        : b.remaining,
+                availableForRequest: b.availableForRequest,
                 utilizationPercent:
                     (b as any).total > 0
                         ? Math.round((b.used / (b as any).total) * 100)

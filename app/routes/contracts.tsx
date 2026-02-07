@@ -310,11 +310,15 @@ export default function StaffContracts() {
 
         setIsDeleting(true)
         try {
-            await axios.delete(`${baseUrl}/contracts/${selectedContract._id}`, {
-                headers: {
-                    Authorization: `Bearer ${sessionData?.token}`,
-                },
-            })
+            await axios.patch(
+                `${baseUrl}/contracts/${selectedContract._id}?op=cancel`,
+                {},
+                {
+                    headers: {
+                        Authorization: `Bearer ${sessionData?.token}`,
+                    },
+                }
+            )
             await mutate() // Refresh the list
             onClose()
             addToast({

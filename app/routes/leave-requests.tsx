@@ -128,7 +128,7 @@ export default function LeaveRequests() {
 
     // Fetch my leave balances
     const { data: balancesData, isLoading: balancesLoading } = useSWR(
-        `${baseUrl}/leave-balances?op=by-staff&staffId=${sessionData?.user?._id}&year=${new Date().getFullYear()}`,
+        `${baseUrl}/leave-balances?op=by-staff&staffId=${sessionData?.user?._id}`,
         fetcher(sessionData.token as string)
     )
 
@@ -152,6 +152,9 @@ export default function LeaveRequests() {
         reason: "",
     })
 
+    // File attachments state
+    const [attachments, setAttachments] = useState<File[]>([])
+
     // Calculated period data
     const [periodData, setPeriodData] = useState<{
         workingDays: number
@@ -173,6 +176,11 @@ export default function LeaveRequests() {
                 return
             }
 
+            console.log("Calculating period for dates:", {
+                startDate: formData.startDate,
+                endDate: formData.endDate
+            })
+
             setIsCalculating(true)
             try {
                 const response = await axios.post(
@@ -188,6 +196,8 @@ export default function LeaveRequests() {
                     }
                 )
 
+                console.log("Period calculation response:", response.data)
+
                 if (response.data?.data) {
                     setPeriodData({
                         workingDays: response.data.data.workingDays,
@@ -196,6 +206,8 @@ export default function LeaveRequests() {
                         holidayDatesSkipped: response.data.data.holidayDatesSkipped || [],
                         totalHolidaysExcluded: response.data.data.totalHolidaysExcluded || 0,
                     })
+                } else {
+                    console.error("Invalid period calculation response:", response.data)
                 }
             } catch (error) {
                 console.error("Error calculating period:", error)
@@ -230,15 +242,11 @@ export default function LeaveRequests() {
         )
         if (!balance) return null
 
-        if (leaveType === LeaveTypes.ANNUAL) {
-            return {
-                available: balance.availableForRequest || 0,
-                accrued: balance.accrued || 0,
-                used: balance.used || 0,
-            }
-        }
         return {
-            available: balance.remaining || 0,
+            available: balance.remaining ?? 0,
+            canRequest: balance.availableForRequest || 0,
+            accrued: balance.accrued || 0,
+            monthlyRate: balance.monthlyRate || 0,
             allocated: balance.allocated || 0,
             used: balance.used || 0,
         }
@@ -263,19 +271,89 @@ export default function LeaveRequests() {
         setSearchParams({ tab })
     }
 
+    // Handle file selection
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files || [])
+        setAttachments(files)
+    }
+
+    // Remove attachment
+    const removeAttachment = (index: number) => {
+        setAttachments(prev => prev.filter((_, i) => i !== index))
+    }
+
     // Handle create leave request
     const handleCreateRequest = async (onClose: () => void) => {
-        if (!formData.startDate || !formData.endDate) return
+        if (!formData.startDate || !formData.endDate) {
+            console.error("Missing dates:", { startDate: formData.startDate, endDate: formData.endDate })
+            addToast({
+                color: "danger",
+                title: "Validation Error",
+                description: "Please select both start and end dates",
+            })
+            return
+        }
+
+        if (!periodData || periodData.workingDays === 0) {
+            console.error("Invalid period data:", periodData)
+            addToast({
+                color: "danger", 
+                title: "Validation Error",
+                description: "Selected dates contain no working days. Please check your date selection.",
+            })
+            return
+        }
+
+        // Check if documents are required for this leave type
+        if (LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(formData.leaveType as any) && attachments.length === 0) {
+            addToast({
+                color: "danger",
+                title: "Validation Error",
+                description: `${formData.leaveType} leave requires supporting documents`,
+            })
+            return
+        }
 
         setIsSubmitting(true)
         try {
-            await axios.post(
+            console.log("Submitting request:", {
+                leaveType: formData.leaveType,
+                startDate: formData.startDate,
+                endDate: formData.endDate,
+                reason: formData.reason,
+                workingDays: periodData.workingDays,
+                attachmentsCount: attachments.length
+            })
+
+            // Upload files first if any
+            let uploadedAttachments: any[] = []
+            if (attachments.length > 0) {
+                const formData = new FormData()
+                attachments.forEach((file, index) => {
+                    formData.append(`files`, file)
+                })
+
+                const uploadResponse = await axios.post(
+                    `${baseUrl}/upload`,
+                    formData,
+                    {
+                        headers: {
+                            Authorization: `Bearer ${sessionData?.token}`,
+                            'Content-Type': 'multipart/form-data',
+                        },
+                    }
+                )
+                uploadedAttachments = uploadResponse.data.files || []
+            }
+
+            const response = await axios.post(
                 `${baseUrl}/leave-requests`,
                 {
                     leaveType: formData.leaveType,
                     startDate: formData.startDate,
                     endDate: formData.endDate,
                     reason: formData.reason || undefined,
+                    attachments: uploadedAttachments,
                 },
                 {
                     headers: {
@@ -283,6 +361,8 @@ export default function LeaveRequests() {
                     },
                 }
             )
+
+            console.log("Request successful:", response.data)
 
             // Reset form
             setFormData({
@@ -292,6 +372,7 @@ export default function LeaveRequests() {
                 reason: "",
             })
             setPeriodData(null)
+            setAttachments([])
 
             await mutateMyRequests()
             onClose()
@@ -302,12 +383,58 @@ export default function LeaveRequests() {
             })
         } catch (error: any) {
             console.error("Error creating request:", error)
-            addToast({
-                color: "danger",
-                title: "Error",
-                description:
-                    error.response?.data?.message || "Failed to submit leave request",
-            })
+            console.error("Error response:", error.response?.data)
+            console.error("Error status:", error.response?.status)
+            console.error("Error headers:", error.response?.headers)
+            
+            // Handle validation errors specifically
+            if (error.response?.status === 422 && error.response?.data) {
+                const errorData = error.response.data
+                console.error("422 Error data:", errorData)
+                
+                if (errorData.errors && Array.isArray(errorData.errors)) {
+                    const validationErrors = errorData.errors
+                    const errorMessages = validationErrors.map((err: any) => 
+                        `${err.field}: ${err.message}`
+                    ).join('; ')
+                    
+                    addToast({
+                        color: "danger",
+                        title: "Validation Error",
+                        description: errorMessages,
+                    })
+                } else if (errorData.message) {
+                    addToast({
+                        color: "danger",
+                        title: "Validation Error", 
+                        description: errorData.message,
+                    })
+                } else {
+                    addToast({
+                        color: "danger",
+                        title: "Validation Error",
+                        description: JSON.stringify(errorData),
+                    })
+                }
+            } else if (error.response?.status === 400 && error.response?.data?.errors) {
+                const validationErrors = error.response.data.errors
+                const errorMessages = validationErrors.map((err: any) => 
+                    `${err.field}: ${err.message}`
+                ).join('; ')
+                
+                addToast({
+                    color: "danger",
+                    title: "Validation Error",
+                    description: errorMessages,
+                })
+            } else {
+                addToast({
+                    color: "danger",
+                    title: "Error",
+                    description:
+                        error.response?.data?.message || "Failed to submit leave request",
+                })
+            }
         } finally {
             setIsSubmitting(false)
         }
@@ -645,10 +772,12 @@ export default function LeaveRequests() {
                                         <LeaveTypeChip type={balance.leaveType} />
                                     </div>
                                     <div className='flex items-baseline gap-1'>
-                                        <span className='text-2xl font-bold text-zinc-900 dark:text-zinc-100'>
-                                            {balance.leaveType === LeaveTypes.ANNUAL
-                                                ? balance.availableForRequest
-                                                : balance.remaining}
+                                        <span className={`text-2xl font-bold ${
+                                            balance.remaining < 0
+                                                ? 'text-danger-500'
+                                                : 'text-zinc-900 dark:text-zinc-100'
+                                        }`}>
+                                            {balance.remaining}
                                         </span>
                                         <span className='text-xs text-zinc-500 dark:text-zinc-400'>
                                             / {balance.allocated} days
@@ -657,6 +786,21 @@ export default function LeaveRequests() {
                                     <p className='text-xs text-zinc-500 dark:text-zinc-400 mt-1'>
                                         Used: {balance.used} days
                                     </p>
+                                    {balance.leaveType === 'annual' && (
+                                        <p className='text-xs text-zinc-500 dark:text-zinc-400'>
+                                            Accrued: {balance.accrued || 0} days ({balance.monthlyRate || 0}/month)
+                                        </p>
+                                    )}
+                                    {balance.remaining < 0 && balance.leaveType === 'annual' && (
+                                        <p className='text-xs text-danger-500 font-medium'>
+                                            Owing: {Math.abs(balance.remaining)} days from next month
+                                        </p>
+                                    )}
+                                    {(balance.availableForRequest ?? Math.max(0, balance.allocated - balance.used)) > 0 && (
+                                        <p className='text-xs text-primary-500'>
+                                            Can request up to: {balance.availableForRequest ?? Math.max(0, balance.allocated - balance.used)} days
+                                        </p>
+                                    )}
                                 </CardBody>
                             </Card>
                         ))
@@ -878,14 +1022,26 @@ export default function LeaveRequests() {
                                         <CardBody className='p-3'>
                                             <div className='flex items-center justify-between'>
                                                 <span className='text-sm text-zinc-600 dark:text-zinc-400'>
-                                                    Available Balance
+                                                    Current Balance
                                                 </span>
-                                                <span className='text-lg font-bold'>
+                                                <span className={`text-lg font-bold ${
+                                                    (getBalance(formData.leaveType)?.available ?? 0) < 0
+                                                        ? 'text-danger-500'
+                                                        : ''
+                                                }`}>
                                                     {getBalance(formData.leaveType)
-                                                        ?.available || 0}{" "}
+                                                        ?.available ?? 0}{" "}
                                                     days
                                                 </span>
                                             </div>
+                                            {formData.leaveType === 'annual' && (
+                                                <p className='text-xs text-zinc-500 dark:text-zinc-400 mt-1'>
+                                                    Accrued: {getBalance(formData.leaveType)?.accrued || 0} days ({getBalance(formData.leaveType)?.monthlyRate || 0}/month)
+                                                </p>
+                                            )}
+                                            <p className='text-xs text-primary-500'>
+                                                Can request up to: {getBalance(formData.leaveType)?.canRequest || 0} days
+                                            </p>
                                             {LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(
                                                 formData.leaveType as any
                                             ) && (
@@ -1033,6 +1189,52 @@ export default function LeaveRequests() {
                                             "border-zinc-200 dark:border-zinc-800",
                                     }}
                                 />
+
+                                {/* File Upload Section */}
+                                {LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(formData.leaveType as any) && (
+                                    <div className='space-y-3'>
+                                        <div className='flex items-center gap-2 mb-2 text-warning-600'>
+                                            <AlertCircle className='size-4' />
+                                            <span className='text-sm font-medium'>
+                                                Supporting Documents Required
+                                            </span>
+                                        </div>
+                                        
+                                        <div className='space-y-2'>
+                                            <input
+                                                type='file'
+                                                multiple
+                                                accept='.pdf,.doc,.docx,.jpg,.jpeg,.png'
+                                                onChange={handleFileChange}
+                                                className='block w-full text-sm text-zinc-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-zinc-50 file:text-zinc-700 hover:file:bg-zinc-100 dark:file:bg-zinc-800 dark:file:text-zinc-300 dark:hover:file:bg-zinc-700'
+                                            />
+                                            
+                                            {attachments.length > 0 && (
+                                                <div className='space-y-2'>
+                                                    <p className='text-xs text-zinc-500'>Selected files:</p>
+                                                    {attachments.map((file, index) => (
+                                                        <div key={index} className='flex items-center justify-between p-2 bg-zinc-50 dark:bg-zinc-900 rounded border border-zinc-200 dark:border-zinc-800'>
+                                                            <div className='flex items-center gap-2'>
+                                                                <FileText className='size-4 text-zinc-400' />
+                                                                <span className='text-sm truncate max-w-[200px]'>{file.name}</span>
+                                                                <span className='text-xs text-zinc-500'>({(file.size / 1024).toFixed(1)} KB)</span>
+                                                            </div>
+                                                            <Button
+                                                                size='sm'
+                                                                color='danger'
+                                                                variant='flat'
+                                                                isIconOnly
+                                                                onPress={() => removeAttachment(index)}
+                                                            >
+                                                                <XCircle className='size-4' />
+                                                            </Button>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                             </DrawerBody>
                             <DrawerFooter>
                                 <Button
@@ -1051,7 +1253,8 @@ export default function LeaveRequests() {
                                         !formData.startDate ||
                                         !formData.endDate ||
                                         !periodData ||
-                                        periodData.workingDays === 0
+                                        periodData.workingDays === 0 ||
+                                        (LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(formData.leaveType as any) && attachments.length === 0)
                                     }
                                 >
                                     Submit Request

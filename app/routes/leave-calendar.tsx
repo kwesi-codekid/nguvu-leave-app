@@ -135,13 +135,13 @@ export default function LeaveCalendar() {
     const generateCalendarDays = () => {
         const startOfMonth = currentMonth.startOf("month")
         const endOfMonth = currentMonth.endOf("month")
-        
+
         // Calculate week boundaries with Sunday as start
         // In Luxon: 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat, 7=Sun
         const startOfMonthWeekday = startOfMonth.weekday
         const daysFromSunday = startOfMonthWeekday === 7 ? 0 : startOfMonthWeekday
         const startOfWeek = startOfMonth.minus({ days: daysFromSunday })
-        
+
         const endOfMonthWeekday = endOfMonth.weekday
         const daysToSaturday = endOfMonthWeekday === 7 ? 6 : 6 - endOfMonthWeekday
         const endOfWeek = endOfMonth.plus({ days: daysToSaturday })
@@ -354,9 +354,9 @@ export default function LeaveCalendar() {
                                     {selectedDepartment === "all"
                                         ? "All Departments"
                                         : departments.find(
-                                              (d: any) =>
-                                                  d._id === selectedDepartment
-                                          )?.name || "All Departments"}
+                                            (d: any) =>
+                                                d._id === selectedDepartment
+                                        )?.name || "All Departments"}
                                 </Button>
                             </DropdownTrigger>
                             <DropdownMenu
@@ -423,31 +423,27 @@ export default function LeaveCalendar() {
                                                         day.isCurrentMonth &&
                                                         setSelectedDate(day.date)
                                                     }
-                                                    className={`min-h-[90px] p-2 rounded-lg cursor-pointer transition-all ${
-                                                        day.isCurrentMonth
+                                                    className={`min-h-[90px] p-2 rounded-lg cursor-pointer transition-all ${day.isCurrentMonth
                                                             ? day.isHoliday
                                                                 ? "bg-red-500/10 dark:bg-red-900/20 hover:bg-red-500/20 dark:hover:bg-red-900/30"
                                                                 : "bg-zinc-100/50 dark:bg-zinc-800/50 hover:bg-zinc-200/50 dark:hover:bg-zinc-700/50"
                                                             : "bg-transparent opacity-40"
-                                                    } ${
-                                                        day.isSelected
+                                                        } ${day.isSelected
                                                             ? "ring-2 ring-primary"
                                                             : ""
-                                                    } ${
-                                                        day.isToday
+                                                        } ${day.isToday
                                                             ? "ring-2 ring-warning-500"
                                                             : ""
-                                                    }`}
+                                                        }`}
                                                 >
                                                     <div className="flex items-center justify-between mb-1">
                                                         <div
-                                                            className={`text-sm font-medium ${
-                                                                day.isCurrentMonth
+                                                            className={`text-sm font-medium ${day.isCurrentMonth
                                                                     ? day.isHoliday
                                                                         ? "text-red-600 dark:text-red-400"
                                                                         : "text-zinc-900 dark:text-zinc-100"
                                                                     : "text-zinc-400 dark:text-zinc-600"
-                                                            }`}
+                                                                }`}
                                                         >
                                                             {day.date.day}
                                                         </div>
@@ -473,13 +469,17 @@ export default function LeaveCalendar() {
                                                                             event
                                                                                 .extendedProps
                                                                                 ?.leaveType as LeaveTypes
+                                                                        const status =
+                                                                            event
+                                                                                .extendedProps
+                                                                                ?.status as string
                                                                         const colors =
-                                                                            LEAVE_TYPE_COLORS[
-                                                                                leaveType
+                                                                            STATUS_COLORS[
+                                                                            status
                                                                             ] ||
-                                                                            LEAVE_TYPE_COLORS[
-                                                                                LeaveTypes
-                                                                                    .ANNUAL
+                                                                            STATUS_COLORS[
+                                                                            LeaveStatus
+                                                                                .PENDING
                                                                             ]
                                                                         const staffName =
                                                                             event
@@ -520,14 +520,14 @@ export default function LeaveCalendar() {
                                                                 )}
                                                             {day.events.length >
                                                                 2 && (
-                                                                <div className="text-xs text-zinc-500 dark:text-zinc-400 font-medium pl-2">
-                                                                    +
-                                                                    {day.events
-                                                                        .length -
-                                                                        2}{" "}
-                                                                    more
-                                                                </div>
-                                                            )}
+                                                                    <div className="text-xs text-zinc-500 dark:text-zinc-400 font-medium pl-2">
+                                                                        +
+                                                                        {day.events
+                                                                            .length -
+                                                                            2}{" "}
+                                                                        more
+                                                                    </div>
+                                                                )}
                                                         </div>
                                                     )}
                                                 </div>
@@ -541,105 +541,6 @@ export default function LeaveCalendar() {
 
                     {/* Sidebar */}
                     <div className="w-80 space-y-4">
-                        {/* Leave Types Legend */}
-                        <Card className="bg-content1 dark:bg-zinc-900/50 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
-                            <CardBody className="p-4">
-                                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white mb-3">
-                                    Leave Types
-                                </h3>
-                                <div className="space-y-2">
-                                    {Object.entries(LEAVE_TYPE_LABELS).map(
-                                        ([type, label]) => (
-                                            <div
-                                                key={type}
-                                                className="flex items-center gap-2"
-                                            >
-                                                <div
-                                                    className={`w-3 h-3 rounded-full ${LEAVE_TYPE_COLORS[type]?.dot || "bg-gray-400"}`}
-                                                />
-                                                <span className="text-sm text-zinc-600 dark:text-zinc-300">
-                                                    {label}
-                                                </span>
-                                            </div>
-                                        )
-                                    )}
-                                </div>
-                            </CardBody>
-                        </Card>
-
-                        {/* Status Legend */}
-                        <Card className="bg-content1 dark:bg-zinc-900/50 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
-                            <CardBody className="p-4">
-                                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white mb-3">
-                                    Status
-                                </h3>
-                                <div className="space-y-2">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-3 h-3 rounded-sm bg-green-500" />
-                                        <span className="text-sm text-zinc-600 dark:text-zinc-300">
-                                            Approved
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-3 h-3 rounded-sm bg-yellow-500" />
-                                        <span className="text-sm text-zinc-600 dark:text-zinc-300">
-                                            Pending Endorsement
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-3 h-3 rounded-sm bg-red-500" />
-                                        <span className="text-sm text-zinc-600 dark:text-zinc-300">
-                                            Rejected
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-3 h-3 rounded-sm bg-red-500/50 flex items-center justify-center">
-                                            <Star className="w-2 h-2 text-red-500 fill-red-500" />
-                                        </div>
-                                        <span className="text-sm text-zinc-600 dark:text-zinc-300">
-                                            Public Holiday
-                                        </span>
-                                    </div>
-                                </div>
-                            </CardBody>
-                        </Card>
-
-                        {/* Holidays This Month */}
-                        {holidays.length > 0 && (
-                            <Card className="bg-content1 dark:bg-zinc-900/50 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
-                                <CardBody className="p-4">
-                                    <div className="flex items-center gap-2 mb-3">
-                                        <Star className="w-4 h-4 text-red-500 fill-red-500" />
-                                        <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
-                                            Holidays This Month
-                                        </h3>
-                                    </div>
-                                    <div className="space-y-2">
-                                        {holidays.map((holiday: any, index: number) => (
-                                            <div
-                                                key={index}
-                                                className="flex items-start gap-2 p-2 rounded-lg bg-red-500/10"
-                                            >
-                                                <div className="flex-1">
-                                                    <p className="text-sm font-medium text-red-600 dark:text-red-400">
-                                                        {holiday.name}
-                                                    </p>
-                                                    <p className="text-xs text-zinc-500">
-                                                        {DateTime.fromISO(holiday.startDate).toFormat("MMM d")}
-                                                        {holiday.startDate !== holiday.endDate &&
-                                                            ` - ${DateTime.fromISO(holiday.endDate).toFormat("MMM d")}`
-                                                        }
-                                                    </p>
-                                                </div>
-                                                <Chip size="sm" variant="flat" color="danger">
-                                                    {holiday.type}
-                                                </Chip>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </CardBody>
-                            </Card>
-                        )}
 
                         {/* Selected Date Details */}
                         <Card className="bg-content1 dark:bg-zinc-900/50 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
@@ -647,8 +548,8 @@ export default function LeaveCalendar() {
                                 <h3 className="text-sm font-semibold text-zinc-900 dark:text-white mb-3">
                                     {selectedDate
                                         ? selectedDate.toFormat(
-                                              "EEEE, MMMM d, yyyy"
-                                          )
+                                            "EEEE, MMMM d, yyyy"
+                                        )
                                         : "Select a date"}
                                 </h3>
 
@@ -738,12 +639,12 @@ export default function LeaveCalendar() {
                                                                         size="sm"
                                                                         color={
                                                                             status ===
-                                                                            LeaveStatus.APPROVED
+                                                                                LeaveStatus.APPROVED
                                                                                 ? "success"
                                                                                 : status ===
                                                                                     LeaveStatus.REJECTED
-                                                                                  ? "danger"
-                                                                                  : "warning"
+                                                                                    ? "danger"
+                                                                                    : "warning"
                                                                         }
                                                                         variant="flat"
                                                                     >
@@ -764,6 +665,81 @@ export default function LeaveCalendar() {
                                 )}
                             </CardBody>
                         </Card>
+                        {/* Status Legend */}
+                        <Card className="bg-content1 dark:bg-zinc-900/50 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
+                            <CardBody className="p-4">
+                                <h3 className="text-sm font-semibold text-zinc-900 dark:text-white mb-3">
+                                    Status
+                                </h3>
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-3 h-3 rounded-sm bg-green-500" />
+                                        <span className="text-sm text-zinc-600 dark:text-zinc-300">
+                                            Approved
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-3 h-3 rounded-sm bg-yellow-500" />
+                                        <span className="text-sm text-zinc-600 dark:text-zinc-300">
+                                            Pending Endorsement
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-3 h-3 rounded-sm bg-red-500" />
+                                        <span className="text-sm text-zinc-600 dark:text-zinc-300">
+                                            Rejected
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-3 h-3 rounded-sm bg-red-500/50 flex items-center justify-center">
+                                            <Star className="w-2 h-2 text-red-500 fill-red-500" />
+                                        </div>
+                                        <span className="text-sm text-zinc-600 dark:text-zinc-300">
+                                            Public Holiday
+                                        </span>
+                                    </div>
+                                </div>
+                            </CardBody>
+                        </Card>
+
+                        {/* Holidays This Month */}
+                        {holidays.length > 0 && (
+                            <Card className="bg-content1 dark:bg-zinc-900/50 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
+                                <CardBody className="p-4">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <Star className="w-4 h-4 text-red-500 fill-red-500" />
+                                        <h3 className="text-sm font-semibold text-zinc-900 dark:text-white">
+                                            Holidays This Month
+                                        </h3>
+                                    </div>
+                                    <div className="space-y-2">
+                                        {holidays.map((holiday: any, index: number) => (
+                                            <div
+                                                key={index}
+                                                className="flex items-start gap-2 p-2 rounded-lg bg-red-500/10"
+                                            >
+                                                <div className="flex-1">
+                                                    <p className="text-sm font-medium text-red-600 dark:text-red-400">
+                                                        {holiday.name}
+                                                    </p>
+                                                    <p className="text-xs text-zinc-500">
+                                                        {DateTime.fromISO(holiday.startDate).toFormat("MMM d")}
+                                                        {holiday.startDate !== holiday.endDate &&
+                                                            ` - ${DateTime.fromISO(holiday.endDate).toFormat("MMM d")}`
+                                                        }
+                                                    </p>
+                                                </div>
+                                                <Chip size="sm" variant="flat" color="danger">
+                                                    {holiday.type}
+                                                </Chip>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </CardBody>
+                            </Card>
+                        )}
+
+
 
                         {/* This Month Summary */}
                         <Card className="bg-content1 dark:bg-zinc-900/50 shadow-none hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">

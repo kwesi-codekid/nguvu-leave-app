@@ -142,6 +142,7 @@ function DashboardSkeleton() {
 
 // KPI Card Component
 function KPICard({
+    className,
     title,
     value,
     subtitle,
@@ -149,6 +150,7 @@ function KPICard({
     trend,
     color = "default",
 }: {
+    className?: string
     title: string
     value: string | number
     subtitle?: string
@@ -157,22 +159,29 @@ function KPICard({
     color?: "default" | "primary" | "success" | "warning" | "danger"
 }) {
     const colorClasses = {
-        default: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400",
-        primary: "bg-primary-100 dark:bg-primary-900/30 text-primary-600 dark:text-primary-400",
-        success: "bg-success-100 dark:bg-success-900/30 text-success-600 dark:text-success-400",
-        warning: "bg-warning-100 dark:bg-warning-900/30 text-warning-600 dark:text-warning-400",
-        danger: "bg-danger-100 dark:bg-danger-900/30 text-danger-600 dark:text-danger-400",
+        default: "bg-danger-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400",
+        primary: "bg-primary-100 dark:bg-primary-800 text-primary-600 dark:text-primary-400",
+        success: "bg-success-100 dark:bg-success-800 text-success-600 dark:text-success-400",
+        warning: "bg-warning-100 dark:bg-warning-800 text-warning-600 dark:text-warning-400",
+        danger: "bg-danger-100 dark:bg-danger-800 text-danger-600 dark:text-danger-400",
+    }
+    const cardBgColors={
+        default: "bg-danger-100 dark:bg-gradient-to-br from-zinc-700 to-zinc-800",
+        primary: "bg-primary-100 dark:bg-gradient-to-br from-primary/70 to-primary/80",
+        success: "bg-success-100 dark:bg-gradient-to-br from-success/70 to-success/80",
+        warning: "bg-warning-100 dark:bg-gradient-to-br from-warning/70 to-warning/80",
+        danger: "bg-danger-100 dark:bg-gradient-to-br from-danger/70 to-danger/80",
     }
 
     return (
-        <Card className="bg-content1 hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
+        <Card  className={`${cardBgColors[color]} hover:scale-[1.01] transition-all duration-300 border border-black/10 dark:border-white/20 shadow-none`}>
             <CardBody className="p-4">
                 <div className="flex items-start justify-between">
                     <div className="flex-1">
-                        <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-1">{title}</p>
+                        <p className="text-sm text-zinc-500 dark:text-white mb-1">{title}</p>
                         <p className="text-2xl font-bold text-zinc-900 dark:text-white">{value}</p>
                         {subtitle && (
-                            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">{subtitle}</p>
+                            <p className="text-xs text-zinc-500 dark:text-white mt-1">{subtitle}</p>
                         )}
                         {trend && (
                             <div className="flex items-center gap-1 mt-2">
@@ -259,7 +268,7 @@ function HRDashboard({ data }: { data: any }) {
             {/* Charts Row */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* Leave Mix Pie Chart */}
-                <Card className="bg-content1 hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
+                <Card className="bg-content1 hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 shadow-none">
                     <CardHeader className="pb-0">
                         <div className="flex items-center gap-2">
                             <PieChart className="size-5 text-primary" />
@@ -301,7 +310,7 @@ function HRDashboard({ data }: { data: any }) {
                 </Card>
 
                 {/* Monthly Trend Chart */}
-                <Card className="bg-content1 lg:col-span-2">
+                <Card className="bg-content1 lg:col-span-2 shadow-none border border-black/20 dark:border-white/20">
                     <CardHeader className="pb-0">
                         <div className="flex items-center gap-2">
                             <BarChart3 className="size-5 text-primary" />
@@ -352,7 +361,7 @@ function HRDashboard({ data }: { data: any }) {
             {/* Bottom Row */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 {/* System Health */}
-                <Card className="bg-content1 hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
+                <Card className="bg-content1 hover:scale-[1.01] shadow-none transition-all duration-300 border border-black/20 dark:border-white/20">
                     <CardHeader className="pb-0">
                         <div className="flex items-center gap-2">
                             <Activity className="size-5 text-primary" />
@@ -407,7 +416,7 @@ function HRDashboard({ data }: { data: any }) {
                 </Card>
 
                 {/* Upcoming Peaks */}
-                <Card className="bg-content1 hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
+                <Card className="bg-content1 hover:scale-[1.01] shadow-none transition-all duration-300 border border-black/20 dark:border-white/20">
                     <CardHeader className="pb-0">
                         <div className="flex items-center gap-2">
                             <TrendingUp className="size-5 text-warning" />
@@ -444,7 +453,7 @@ function HRDashboard({ data }: { data: any }) {
                 </Card>
 
                 {/* Low Balance Alerts */}
-                <Card className="bg-content1 hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
+                <Card className="bg-content1 hover:scale-[1.01] shadow-none transition-all duration-300 border border-black/20 dark:border-white/20">
                     <CardHeader className="pb-0">
                         <div className="flex items-center justify-between w-full">
                             <div className="flex items-center gap-2">

@@ -463,11 +463,8 @@ export class ReportController {
                     }
                 }
 
-                // Calculate available for request (for annual leave)
-                const availableForRequest =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? balance.availableForRequest
-                        : balance.remaining
+                // Calculate available for request
+                const availableForRequest = balance.availableForRequest
 
                 // Add to per staff per type
                 const record = {
@@ -528,9 +525,7 @@ export class ReportController {
                 stats.totals.totalAllocated += balance.allocated
                 stats.totals.totalUsed += balance.used
                 stats.totals.totalRemaining += balance.remaining
-                if (balance.leaveType === LeaveTypes.ANNUAL) {
-                    stats.totals.totalAvailableForRequest += availableForRequest
-                }
+                stats.totals.totalAvailableForRequest += availableForRequest
             }
 
             // Calculate averages and utilization
