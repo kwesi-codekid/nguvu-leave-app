@@ -231,6 +231,7 @@ export class StaffController {
                 gender,
                 address,
                 emergencyContact,
+                password,
             } = req.body
             const user = (req as any).user
 
@@ -505,15 +506,35 @@ export class StaffController {
                 )
             }
 
-            if (Object.keys(updates).length === 0) {
+            // Handle password update (HR/Admin only)
+            let passwordUpdated = false
+            if (password && isHRAdmin) {
+                await staff.setPassword(password)
+                await staff.save()
+                passwordUpdated = true
+                changes.push({
+                    field: "password",
+                    oldValue: "[hidden]",
+                    newValue: "[updated]",
+                    fieldLabel: "Password",
+                })
+            }
+
+            if (Object.keys(updates).length === 0 && !passwordUpdated) {
                 return successResponseObject("No changes to update", staff)
             }
 
             // Update staff
-            const updatedStaff = await Staff.findByIdAndUpdate(id, updates, {
-                new: true,
-                runValidators: true,
-            }).populate("department", "name")
+            let updatedStaff
+            if (Object.keys(updates).length > 0) {
+                updatedStaff = await Staff.findByIdAndUpdate(id, updates, {
+                    new: true,
+                    runValidators: true,
+                }).populate("department", "name")
+            } else {
+                // Only password was updated, fetch fresh staff data
+                updatedStaff = await Staff.findById(id).populate("department", "name")
+            }
 
             if (!updatedStaff) {
                 return errorResponseObject("Failed to update staff member")

@@ -1,4 +1,37 @@
 import {
+    Autocomplete,
+    AutocompleteItem,
+    Avatar,
+    Button,
+    Card,
+    CardBody,
+    Chip,
+    Divider,
+    Drawer,
+    DrawerBody,
+    DrawerContent,
+    DrawerFooter,
+    DrawerHeader,
+    Input,
+    Modal,
+    ModalBody,
+    ModalContent,
+    ModalFooter,
+    ModalHeader,
+    Pagination,
+    Select,
+    SelectItem,
+    TableCell,
+    TableRow,
+    Tooltip,
+    useDisclosure,
+    CheckboxGroup,
+    Checkbox,
+    addToast,
+} from "@heroui/react"
+import { useState } from "react"
+import axios from "axios"
+import {
     Link,
     redirect,
     useLoaderData,
@@ -8,66 +41,333 @@ import {
 import useSWR from "swr"
 import { fetcher } from "~/ui/lib/fetcher"
 import AppLayout from "~/ui/layouts/app-layout"
-import {
-    Button,
-    Pagination,
-    Select,
-    SelectItem,
-    TableCell,
-    TableRow,
-    Tooltip,
-} from "@heroui/react"
 import { getSessionData, isAuthenticated } from "~/auth-session"
 import { LoaderFunctionArgs } from "react-router"
-import { DepartmentStatsSection } from "~/ui/fragments/department-stats"
 import { SearchInput } from "~/ui/components/inputs"
 import { DataTable } from "~/ui/components/data-table"
-import { StaffInterface } from "~/utils/types"
-import { Building2, List, Pencil, Phone, Trash2, User } from "lucide-react"
-import { GenderChip, StaffChip } from "~/ui/components/chips"
+import { DepartmentInterface, StaffInterface } from "~/utils/types"
+import {
+    Building2,
+    Calendar,
+    CheckCircle2,
+    Eye,
+    Mail,
+    Pencil,
+    Phone,
+    Shield,
+    Trash2,
+    User,
+    UserCircle,
+    Users,
+    XCircle,
+    Hash,
+    MapPin,
+    AlertCircle,
+} from "lucide-react"
+import { GenderChip } from "~/ui/components/chips"
 import { StaffAvatar } from "~/ui/components/avatars"
 import { MobileList } from "~/ui/components/lists"
 
-export default function Staff() {
-    const { sessionData, baseUrl } = useLoaderData<typeof loader>()
-    const navigate = useNavigate()
-    const params = new URLSearchParams()
-    const search = params.get("search") || ""
-    const limit = params.get("limit") || "10"
-    const page = params.get("page") || "1"
+// Permission options
+const PERMISSION_OPTIONS = [
+    { value: "STAFF", label: "Staff", description: "Basic staff access" },
+    { value: "MANAGER", label: "Manager", description: "Can manage team members" },
+    { value: "HR", label: "HR", description: "Human resources access" },
+    { value: "ADMIN", label: "Admin", description: "Full system access" },
+]
 
-    const { data, isLoading, error } = useSWR(
+// Gender options
+const GENDER_OPTIONS = [
+    { value: "male", label: "Male" },
+    { value: "female", label: "Female" },
+]
+
+export default function Staff() {
+    const { sessionData, baseUrl, search, limit, page } =
+        useLoaderData<typeof loader>()
+    const navigate = useNavigate()
+
+    const { data, isLoading, error, mutate } = useSWR(
         `${baseUrl}/staff?search=${search}&limit=${limit}&page=${page}`,
-        fetcher(sessionData?.token as string)
+        fetcher(sessionData?.token as string),
+        {
+            refreshInterval: 0
+        }
     )
 
+    // Fetch departments for dropdown
+    const { data: departmentsData } = useSWR(
+        `${baseUrl}/departments`,
+        fetcher(sessionData?.token as string),
+        {
+            refreshInterval: 0
+        }
+    )
+
+    const createDisclosure = useDisclosure()
+    const editDisclosure = useDisclosure()
+    const viewDisclosure = useDisclosure()
+    const deleteDisclosure = useDisclosure()
+
+    // Selected staff for view/edit/delete
+    const [selectedStaff, setSelectedStaff] = useState<StaffInterface | null>(
+        null
+    )
+
+    // Form state for create
+    const [formData, setFormData] = useState({
+        name: "",
+        phone: "",
+        email: "",
+        staffId: "",
+        department: "",
+        gender: "",
+        password: "",
+        permissions: ["STAFF"] as string[],
+    })
+
+    // Form state for edit
+    const [editFormData, setEditFormData] = useState({
+        name: "",
+        phone: "",
+        email: "",
+        staffId: "",
+        department: "",
+        gender: "",
+        password: "",
+        permissions: [] as string[],
+    })
+
+    const [isSubmitting, setIsSubmitting] = useState(false)
+    const [isDeleting, setIsDeleting] = useState(false)
+
+    // Generate staff ID
+    const generateStaffId = () => {
+        const prefix = "STF"
+        const timestamp = Date.now().toString().slice(-6)
+        const random = Math.floor(Math.random() * 100)
+            .toString()
+            .padStart(2, "0")
+        return `${prefix}${timestamp}${random}`
+    }
+
+    const handleCreateStaff = async (onClose: () => void) => {
+        if (
+            !formData.name.trim() ||
+            !formData.phone.trim() ||
+            !formData.department ||
+            !formData.gender
+        )
+            return
+
+        setIsSubmitting(true)
+        try {
+            await axios.post(
+                `${baseUrl}/staff`,
+                {
+                    name: formData.name,
+                    phone: formData.phone,
+                    email: formData.email || undefined,
+                    staffId: formData.staffId || generateStaffId(),
+                    department: formData.department,
+                    gender: formData.gender,
+                    password: formData.password || undefined,
+                    permissions: formData.permissions,
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${sessionData?.token}`,
+                    },
+                }
+            )
+            // Reset form and close drawer
+            setFormData({
+                name: "",
+                phone: "",
+                email: "",
+                staffId: "",
+                department: "",
+                gender: "",
+                password: "",
+                permissions: ["STAFF"],
+            })
+            mutate() // Refresh the list
+            onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Staff member created successfully",
+            })
+        } catch (error: any) {
+            console.error("Error creating staff:", error)
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to create staff member",
+            })
+        } finally {
+            setIsSubmitting(false)
+        }
+    }
+
+    // Handle view staff
+    const handleViewStaff = (staff: StaffInterface) => {
+        setSelectedStaff(staff)
+        viewDisclosure.onOpen()
+    }
+
+    // Handle edit staff - open drawer with pre-filled data
+    const handleEditStaff = (staff: StaffInterface) => {
+        setSelectedStaff(staff)
+        setEditFormData({
+            name: staff.name,
+            phone: staff.phone,
+            email: staff.email || "",
+            staffId: staff.staffId,
+            department: (staff.department as any)?._id || "",
+            gender: staff.gender,
+            password: "",
+            permissions: staff.permissions || [],
+        })
+        editDisclosure.onOpen()
+    }
+
+    // Submit edit
+    const handleSubmitEdit = async (onClose: () => void) => {
+        if (!selectedStaff || !editFormData.name.trim()) return
+
+        setIsSubmitting(true)
+        try {
+            await axios.put(
+                `${baseUrl}/staff/${selectedStaff._id}`,
+                {
+                    name: editFormData.name,
+                    phone: editFormData.phone,
+                    email: editFormData.email || undefined,
+                    staffId: editFormData.staffId,
+                    department: editFormData.department,
+                    gender: editFormData.gender,
+                    password: editFormData.password || undefined,
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${sessionData?.token}`,
+                    },
+                }
+            )
+
+            // Update permissions separately if changed
+            const originalPermissions = selectedStaff.permissions || []
+            const newPermissions = editFormData.permissions
+            if (
+                JSON.stringify(originalPermissions.sort()) !==
+                JSON.stringify(newPermissions.sort())
+            ) {
+                await axios.patch(
+                    `${baseUrl}/staff/${selectedStaff._id}?op=permissions`,
+                    { permissions: newPermissions },
+                    {
+                        headers: {
+                            Authorization: `Bearer ${sessionData?.token}`,
+                        },
+                    }
+                )
+            }
+
+            mutate() // Refresh the list
+            onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Staff member updated successfully",
+            })
+        } catch (error: any) {
+            console.error("Error updating staff:", error)
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to update staff member",
+            })
+        } finally {
+            setIsSubmitting(false)
+        }
+    }
+
+    // Handle delete staff - open confirmation modal
+    const handleDeleteClick = (staff: StaffInterface) => {
+        setSelectedStaff(staff)
+        deleteDisclosure.onOpen()
+    }
+
+    // Confirm delete
+    const handleConfirmDelete = async (onClose: () => void) => {
+        if (!selectedStaff) return
+
+        setIsDeleting(true)
+        try {
+            await axios.delete(`${baseUrl}/staff/${selectedStaff._id}`, {
+                headers: {
+                    Authorization: `Bearer ${sessionData?.token}`,
+                },
+            })
+            mutate() // Refresh the list
+            onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Staff member deleted successfully",
+            })
+        } catch (error: any) {
+            console.error("Error deleting staff:", error)
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to delete staff member",
+            })
+        } finally {
+            setIsDeleting(false)
+        }
+    }
+
+    // Get status color
+    const getStatusColor = (status: string) => {
+        switch (status) {
+            case "active":
+                return "success"
+            case "inactive":
+                return "warning"
+            case "suspended":
+                return "danger"
+            default:
+                return "default"
+        }
+    }
+
     return (
-        <AppLayout user={sessionData.user}>
+        <AppLayout user={sessionData.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-8 pb-8'>
                 {/* header */}
                 <div className='flex justify-between items-center'>
                     <div>
                         <h1 className='text-2xl font-bold'>Staff</h1>
                         <p className='text-xs text-zinc-500'>
-                            View, create and manage staff
+                            View, create and manage staff members
                         </p>
                     </div>
                     <div>
                         <Button
                             size='sm'
                             color='warning'
-                            // onPress={createDisclosure.onOpen}
+                            onPress={createDisclosure.onOpen}
+                            className='bg-warning/70 dark:bg-warning/70 text-white hover:shadow-lg hover:scale-[1.01] transition-all duration-300'
                         >
                             Add Staff
                         </Button>
                     </div>
                 </div>
-
-                {/* staff stats */}
-                <DepartmentStatsSection
-                    baseUrl={baseUrl as string}
-                    token={sessionData?.token as string}
-                />
 
                 {/* staff list */}
                 <div>
@@ -83,7 +383,7 @@ export default function Staff() {
                             "Contact",
                             "Gender",
                             "Department",
-                            "Contract",
+                            "Status",
                             "Actions",
                         ]}
                         bottomContent={
@@ -93,9 +393,8 @@ export default function Staff() {
                                     radius='sm'
                                     variant='bordered'
                                     className='w-20'
-                                    selectedKeys={[limit.toString() || "10"]}
+                                    selectedKeys={[limit.toString()]}
                                     aria-label='Limit'
-                                    aria-labelledby='Limit'
                                     classNames={{
                                         value: "dark:!text-white",
                                         trigger: [
@@ -104,21 +403,19 @@ export default function Staff() {
                                         ],
                                     }}
                                     onSelectionChange={(keys) => {
-                                        navigate(
-                                            `?limit=${Array.from(keys)[0]}`
-                                        )
+                                        navigate(`?limit=${Array.from(keys)[0]}`)
                                     }}
                                 >
-                                    <SelectItem key={"10"}>10</SelectItem>
-                                    <SelectItem key={"20"}>20</SelectItem>
-                                    <SelectItem key={"50"}>50</SelectItem>
-                                    <SelectItem key={"100"}>100</SelectItem>
+                                    <SelectItem key='10'>10</SelectItem>
+                                    <SelectItem key='20'>20</SelectItem>
+                                    <SelectItem key='50'>50</SelectItem>
+                                    <SelectItem key='100'>100</SelectItem>
                                 </Select>
 
                                 <div className='flex items-center gap-2'>
                                     <Pagination
                                         total={
-                                            data?.data?.pagination?.totalPages
+                                            data?.data?.pagination?.totalPages || 1
                                         }
                                         page={parseInt(page)}
                                         size='sm'
@@ -130,10 +427,8 @@ export default function Staff() {
                                             next: "dark:bg-zinc-800 dark:text-white",
                                             prev: "dark:bg-zinc-800 dark:text-white",
                                         }}
-                                        onChange={(page) => {
-                                            navigate(
-                                                `?page=${page}&limit=${limit}`
-                                            )
+                                        onChange={(p) => {
+                                            navigate(`?page=${p}&limit=${limit}`)
                                         }}
                                     />
                                 </div>
@@ -141,7 +436,10 @@ export default function Staff() {
                         }
                     >
                         {data?.data?.staff?.map((staff: StaffInterface) => (
-                            <TableRow key={staff._id}>
+                            <TableRow
+                                key={staff._id}
+                                className='hover:bg-zinc-100 dark:hover:bg-zinc-900/50 transition-all duration-300'
+                            >
                                 <TableCell>
                                     <StaffAvatar
                                         name={staff.name}
@@ -153,9 +451,9 @@ export default function Staff() {
                                 </TableCell>
                                 <TableCell>
                                     <div>
-                                        <p>{staff.phone}</p>
+                                        <p className='text-sm'>{staff.phone}</p>
                                         <p className='text-xs text-zinc-500'>
-                                            {staff.email}
+                                            {staff.email || "-"}
                                         </p>
                                     </div>
                                 </TableCell>
@@ -163,9 +461,17 @@ export default function Staff() {
                                     <GenderChip gender={staff.gender} />
                                 </TableCell>
                                 <TableCell className='line-clamp-1 leading-loose'>
-                                    {(staff.department as any)?.name}
+                                    {(staff.department as any)?.name || "-"}
                                 </TableCell>
-                                <TableCell>{staff.gender}</TableCell>
+                                <TableCell>
+                                    <Chip
+                                        size='sm'
+                                        variant='flat'
+                                        color={getStatusColor(staff.status)}
+                                    >
+                                        {staff.status}
+                                    </Chip>
+                                </TableCell>
                                 <TableCell>
                                     <div className='flex items-center gap-3'>
                                         <Tooltip content='View details'>
@@ -173,31 +479,38 @@ export default function Staff() {
                                                 size='sm'
                                                 color='success'
                                                 variant='flat'
-                                                as={Link}
-                                                to={`/departments/${staff._id}`}
                                                 isIconOnly
+                                                onPress={() =>
+                                                    handleViewStaff(staff)
+                                                }
                                                 startContent={
-                                                    <List className='size-4' />
+                                                    <Eye className='size-4' />
                                                 }
                                             ></Button>
                                         </Tooltip>
-                                        <Tooltip content='Edit department'>
+                                        <Tooltip content='Edit staff'>
                                             <Button
                                                 size='sm'
                                                 color='primary'
                                                 variant='flat'
                                                 isIconOnly
+                                                onPress={() =>
+                                                    handleEditStaff(staff)
+                                                }
                                                 startContent={
                                                     <Pencil className='size-4' />
                                                 }
                                             ></Button>
                                         </Tooltip>
-                                        <Tooltip content='Trash department'>
+                                        <Tooltip content='Delete staff'>
                                             <Button
                                                 size='sm'
                                                 color='danger'
                                                 variant='flat'
                                                 isIconOnly
+                                                onPress={() =>
+                                                    handleDeleteClick(staff)
+                                                }
                                                 startContent={
                                                     <Trash2 className='size-4' />
                                                 }
@@ -218,7 +531,10 @@ export default function Staff() {
                         listContent={data?.data?.staff?.map(
                             (staff: StaffInterface) => ({
                                 content: (
-                                    <Link to={`/staff/${staff._id}`}>
+                                    <div
+                                        onClick={() => handleViewStaff(staff)}
+                                        className='cursor-pointer'
+                                    >
                                         <StaffAvatar
                                             name={staff.name}
                                             profileImage={
@@ -226,38 +542,37 @@ export default function Staff() {
                                             }
                                             staffId={staff.staffId}
                                         />
-                                        <div className='flex items-center justify-between pl-10'>
+                                        <div className='flex items-center justify-between pl-10 mt-1'>
                                             <div className='flex items-center gap-1'>
-                                                {/* <Phone className='size-4' /> */}
                                                 <p className='text-sm'>
                                                     {staff.phone}
                                                 </p>
                                             </div>
                                             <div className='flex items-center gap-1'>
-                                                <Building2 className='size-4' />
+                                                <Building2 className='size-4 text-zinc-400' />
                                                 <p className='text-sm'>
                                                     {
-                                                        (
-                                                            staff.department as any
-                                                        )?.name
+                                                        (staff.department as any)
+                                                            ?.name
                                                     }
                                                 </p>
                                             </div>
                                         </div>
-                                    </Link>
+                                    </div>
                                 ),
                             })
                         )}
                     />
-                    <div className='flex items-center justify-between mt-3'>
+
+                    {/* mobile pagination */}
+                    <div className='flex md:hidden items-center justify-between mt-3'>
                         <Select
                             size='sm'
                             radius='sm'
                             variant='bordered'
                             className='w-20'
-                            selectedKeys={[limit.toString() || "10"]}
+                            selectedKeys={[limit.toString()]}
                             aria-label='Limit'
-                            aria-labelledby='Limit'
                             classNames={{
                                 value: "dark:!text-white",
                                 trigger: [
@@ -269,15 +584,15 @@ export default function Staff() {
                                 navigate(`?limit=${Array.from(keys)[0]}`)
                             }}
                         >
-                            <SelectItem key={"10"}>10</SelectItem>
-                            <SelectItem key={"20"}>20</SelectItem>
-                            <SelectItem key={"50"}>50</SelectItem>
-                            <SelectItem key={"100"}>100</SelectItem>
+                            <SelectItem key='10'>10</SelectItem>
+                            <SelectItem key='20'>20</SelectItem>
+                            <SelectItem key='50'>50</SelectItem>
+                            <SelectItem key='100'>100</SelectItem>
                         </Select>
 
                         <div className='flex items-center gap-2'>
                             <Pagination
-                                total={data?.data?.pagination?.totalPages}
+                                total={data?.data?.pagination?.totalPages || 1}
                                 page={parseInt(page)}
                                 size='sm'
                                 showControls
@@ -288,14 +603,759 @@ export default function Staff() {
                                     next: "dark:bg-zinc-800 dark:text-white",
                                     prev: "dark:bg-zinc-800 dark:text-white",
                                 }}
-                                onChange={(page) => {
-                                    navigate(`?page=${page}&limit=${limit}`)
+                                onChange={(p) => {
+                                    navigate(`?page=${p}&limit=${limit}`)
                                 }}
                             />
                         </div>
                     </div>
                 </div>
             </div>
+
+            {/* Create Staff Drawer */}
+            <Drawer
+                isOpen={createDisclosure.isOpen}
+                onOpenChange={createDisclosure.onOpenChange}
+                size='sm'
+                backdrop='blur'
+                scrollBehavior='inside'
+            >
+                <DrawerContent>
+                    {(onClose) => (
+                        <>
+                            <DrawerHeader>Add New Staff</DrawerHeader>
+                            <Divider className='my-4' />
+                            <DrawerBody className='flex flex-col gap-6'>
+                                <Input
+                                    label='Full Name'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter full name'
+                                    isRequired
+                                    value={formData.name}
+                                    onValueChange={(value) =>
+                                        setFormData({ ...formData, name: value })
+                                    }
+                                    classNames={{
+                                        label: "text-primary-500",
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='Phone Number'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter phone number'
+                                    isRequired
+                                    value={formData.phone}
+                                    onValueChange={(value) =>
+                                        setFormData({ ...formData, phone: value })
+                                    }
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='Email Address'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter email (optional)'
+                                    type='email'
+                                    value={formData.email}
+                                    onValueChange={(value) =>
+                                        setFormData({ ...formData, email: value })
+                                    }
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='Password'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter password (optional)'
+                                    type='password'
+                                    value={formData.password}
+                                    onValueChange={(value) =>
+                                        setFormData({ ...formData, password: value })
+                                    }
+                                    description='Leave empty if using OTP login only'
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='Staff ID'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Auto-generated if left empty'
+                                    value={formData.staffId}
+                                    onValueChange={(value) =>
+                                        setFormData({
+                                            ...formData,
+                                            staffId: value,
+                                        })
+                                    }
+                                    description='Leave empty to auto-generate'
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Autocomplete
+                                    label='Department'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Select a department'
+                                    isRequired
+                                    selectedKey={formData.department}
+                                    onSelectionChange={(key) =>
+                                        setFormData({
+                                            ...formData,
+                                            department: key as string,
+                                        })
+                                    }
+                                    classNames={{
+                                        base: "w-full",
+                                    }}
+                                >
+                                    {(
+                                        departmentsData?.data?.departments || []
+                                    ).map((dept: DepartmentInterface) => (
+                                        <AutocompleteItem
+                                            key={dept._id}
+                                            textValue={dept.name}
+                                        >
+                                            <div className='flex items-center gap-2'>
+                                                <Building2 className='size-4 text-zinc-400' />
+                                                <span>{dept.name}</span>
+                                            </div>
+                                        </AutocompleteItem>
+                                    ))}
+                                </Autocomplete>
+                                <Select
+                                    label='Gender'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Select gender'
+                                    isRequired
+                                    selectedKeys={
+                                        formData.gender ? [formData.gender] : []
+                                    }
+                                    onSelectionChange={(keys) =>
+                                        setFormData({
+                                            ...formData,
+                                            gender: Array.from(keys)[0] as string,
+                                        })
+                                    }
+                                    classNames={{
+                                        trigger:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                >
+                                    {GENDER_OPTIONS.map((option) => (
+                                        <SelectItem key={option.value}>
+                                            {option.label}
+                                        </SelectItem>
+                                    ))}
+                                </Select>
+                                <Divider />
+                                <div>
+                                    <p className='text-sm font-medium mb-3'>
+                                        Permissions
+                                    </p>
+                                    <CheckboxGroup
+                                        value={formData.permissions}
+                                        onValueChange={(value) =>
+                                            setFormData({
+                                                ...formData,
+                                                permissions: value,
+                                            })
+                                        }
+                                    >
+                                        {PERMISSION_OPTIONS.map((option) => (
+                                            <Checkbox
+                                                key={option.value}
+                                                value={option.value}
+                                                classNames={{
+                                                    label: "text-sm",
+                                                }}
+                                            >
+                                                <div>
+                                                    <p className='text-sm'>
+                                                        {option.label}
+                                                    </p>
+                                                    <p className='text-xs text-zinc-500'>
+                                                        {option.description}
+                                                    </p>
+                                                </div>
+                                            </Checkbox>
+                                        ))}
+                                    </CheckboxGroup>
+                                </div>
+                            </DrawerBody>
+                            <DrawerFooter>
+                                <Button
+                                    color='warning'
+                                    variant='flat'
+                                    onPress={onClose}
+                                    isDisabled={isSubmitting}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    color='warning'
+                                    onPress={() => handleCreateStaff(onClose)}
+                                    isLoading={isSubmitting}
+                                    isDisabled={
+                                        !formData.name.trim() ||
+                                        !formData.phone.trim() ||
+                                        !formData.department ||
+                                        !formData.gender
+                                    }
+                                >
+                                    Add Staff
+                                </Button>
+                            </DrawerFooter>
+                        </>
+                    )}
+                </DrawerContent>
+            </Drawer>
+
+            {/* View Staff Drawer */}
+            <Drawer
+                isOpen={viewDisclosure.isOpen}
+                onOpenChange={viewDisclosure.onOpenChange}
+                size='sm'
+                backdrop='blur'
+                scrollBehavior='inside'
+            >
+                <DrawerContent>
+                    {(onClose) => (
+                        <>
+                            <DrawerHeader className='flex flex-col gap-1 pb-0'>
+                                <span className='text-sm text-zinc-500'>
+                                    Staff Details
+                                </span>
+                            </DrawerHeader>
+                            <DrawerBody className='flex flex-col gap-5 pt-2'>
+                                {selectedStaff && (
+                                    <>
+                                        {/* Header Card */}
+                                        <Card className='bg-gradient-to-br from-success-100 to-success-50 dark:from-success-900/10 dark:to-success-800/20 border-none shadow-sm'>
+                                            <CardBody className='flex flex-row items-center gap-4 py-5'>
+                                                <Avatar
+                                                    src={
+                                                        selectedStaff.profileImage
+                                                            ?.url
+                                                    }
+                                                    name={selectedStaff.name}
+                                                    size='lg'
+                                                    className='bg-success-500/20'
+                                                />
+                                                <div className='flex-1'>
+                                                    <h3 className='text-xl font-semibold text-zinc-800 dark:text-zinc-100'>
+                                                        {selectedStaff.name}
+                                                    </h3>
+                                                    <div className='flex items-center gap-2 mt-1'>
+                                                        <Hash className='size-3 text-zinc-400' />
+                                                        <span className='text-sm text-zinc-500'>
+                                                            {selectedStaff.staffId}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </CardBody>
+                                        </Card>
+
+                                        {/* Status & Leave Badge */}
+                                        <div className='flex items-center gap-2 px-1'>
+                                            <Chip
+                                                size='sm'
+                                                variant='flat'
+                                                color={getStatusColor(
+                                                    selectedStaff.status
+                                                )}
+                                                startContent={
+                                                    selectedStaff.status ===
+                                                    "active" ? (
+                                                        <CheckCircle2 className='size-3' />
+                                                    ) : (
+                                                        <XCircle className='size-3' />
+                                                    )
+                                                }
+                                            >
+                                                {selectedStaff.status}
+                                            </Chip>
+                                            {selectedStaff.isOnLeave && (
+                                                <Chip
+                                                    size='sm'
+                                                    variant='flat'
+                                                    color='warning'
+                                                >
+                                                    On Leave
+                                                </Chip>
+                                            )}
+                                            <GenderChip
+                                                gender={selectedStaff.gender}
+                                            />
+                                        </div>
+
+                                        <Divider />
+
+                                        {/* Contact Info */}
+                                        <div className='px-1'>
+                                            <div className='flex items-center gap-2 mb-3'>
+                                                <Phone className='size-4 text-zinc-400' />
+                                                <span className='text-xs font-medium text-zinc-500 uppercase tracking-wider'>
+                                                    Contact
+                                                </span>
+                                            </div>
+                                            <div className='space-y-2 pl-6'>
+                                                <div className='flex items-center gap-2'>
+                                                    <Phone className='size-4 text-zinc-400' />
+                                                    <span className='text-sm'>
+                                                        {selectedStaff.phone}
+                                                    </span>
+                                                </div>
+                                                {selectedStaff.email && (
+                                                    <div className='flex items-center gap-2'>
+                                                        <Mail className='size-4 text-zinc-400' />
+                                                        <span className='text-sm'>
+                                                            {selectedStaff.email}
+                                                        </span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <Divider />
+
+                                        {/* Department */}
+                                        <div className='px-1'>
+                                            <div className='flex items-center gap-2 mb-3'>
+                                                <Building2 className='size-4 text-zinc-400' />
+                                                <span className='text-xs font-medium text-zinc-500 uppercase tracking-wider'>
+                                                    Department
+                                                </span>
+                                            </div>
+                                            <Card className='border border-zinc-200 dark:border-zinc-800 shadow-none'>
+                                                <CardBody className='flex flex-row items-center gap-3 py-3'>
+                                                    <div className='size-10 rounded-lg bg-primary-100 flex items-center justify-center'>
+                                                        <Building2 className='size-5 text-primary-600' />
+                                                    </div>
+                                                    <div className='flex-1'>
+                                                        <p className='font-medium text-sm'>
+                                                            {(
+                                                                selectedStaff.department as any
+                                                            )?.name || "-"}
+                                                        </p>
+                                                    </div>
+                                                </CardBody>
+                                            </Card>
+                                        </div>
+
+                                        <Divider />
+
+                                        {/* Permissions */}
+                                        <div className='px-1'>
+                                            <div className='flex items-center gap-2 mb-3'>
+                                                <Shield className='size-4 text-zinc-400' />
+                                                <span className='text-xs font-medium text-zinc-500 uppercase tracking-wider'>
+                                                    Permissions
+                                                </span>
+                                            </div>
+                                            <div className='flex flex-wrap gap-2 pl-6'>
+                                                {selectedStaff.permissions?.length >
+                                                0 ? (
+                                                    selectedStaff.permissions.map(
+                                                        (perm) => (
+                                                            <Chip
+                                                                key={perm}
+                                                                size='sm'
+                                                                variant='flat'
+                                                                color='primary'
+                                                            >
+                                                                {perm}
+                                                            </Chip>
+                                                        )
+                                                    )
+                                                ) : (
+                                                    <span className='text-sm text-zinc-400 italic'>
+                                                        No permissions assigned
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Emergency Contact */}
+                                        {selectedStaff.emergencyContact && (
+                                            <>
+                                                <Divider />
+                                                <div className='px-1'>
+                                                    <div className='flex items-center gap-2 mb-3'>
+                                                        <AlertCircle className='size-4 text-zinc-400' />
+                                                        <span className='text-xs font-medium text-zinc-500 uppercase tracking-wider'>
+                                                            Emergency Contact
+                                                        </span>
+                                                    </div>
+                                                    <Card className='border border-zinc-200 dark:border-zinc-800 shadow-none'>
+                                                        <CardBody className='py-3'>
+                                                            <p className='font-medium text-sm'>
+                                                                {
+                                                                    selectedStaff
+                                                                        .emergencyContact
+                                                                        .name
+                                                                }
+                                                            </p>
+                                                            <p className='text-xs text-zinc-500'>
+                                                                {
+                                                                    selectedStaff
+                                                                        .emergencyContact
+                                                                        .phone
+                                                                }
+                                                            </p>
+                                                            {selectedStaff
+                                                                .emergencyContact
+                                                                .relation && (
+                                                                <p className='text-xs text-zinc-400'>
+                                                                    {
+                                                                        selectedStaff
+                                                                            .emergencyContact
+                                                                            .relation
+                                                                    }
+                                                                </p>
+                                                            )}
+                                                        </CardBody>
+                                                    </Card>
+                                                </div>
+                                            </>
+                                        )}
+
+                                        <Divider />
+
+                                        {/* Created At */}
+                                        <div className='px-1'>
+                                            <Card className='border border-zinc-200 dark:border-zinc-800 shadow-none'>
+                                                <CardBody className='py-3 px-4'>
+                                                    <div className='flex items-center gap-2 mb-1'>
+                                                        <Calendar className='size-4 text-zinc-400' />
+                                                        <span className='text-xs text-zinc-500'>
+                                                            Joined
+                                                        </span>
+                                                    </div>
+                                                    <p className='text-sm font-medium text-zinc-800 dark:text-zinc-100'>
+                                                        {new Date(
+                                                            selectedStaff.createdAt!
+                                                        ).toLocaleDateString(
+                                                            "en-US",
+                                                            {
+                                                                month: "short",
+                                                                day: "numeric",
+                                                                year: "numeric",
+                                                            }
+                                                        )}
+                                                    </p>
+                                                </CardBody>
+                                            </Card>
+                                        </div>
+                                    </>
+                                )}
+                            </DrawerBody>
+                            <DrawerFooter className='border-t border-zinc-200 dark:border-zinc-800'>
+                                <Button
+                                    color='default'
+                                    variant='flat'
+                                    onPress={onClose}
+                                >
+                                    Close
+                                </Button>
+                                <Button
+                                    color='warning'
+                                    startContent={<Pencil className='size-4' />}
+                                    onPress={() => {
+                                        onClose()
+                                        if (selectedStaff) {
+                                            handleEditStaff(selectedStaff)
+                                        }
+                                    }}
+                                >
+                                    Edit Staff
+                                </Button>
+                            </DrawerFooter>
+                        </>
+                    )}
+                </DrawerContent>
+            </Drawer>
+
+            {/* Edit Staff Drawer */}
+            <Drawer
+                isOpen={editDisclosure.isOpen}
+                onOpenChange={editDisclosure.onOpenChange}
+                size='sm'
+                backdrop='blur'
+                scrollBehavior='inside'
+            >
+                <DrawerContent>
+                    {(onClose) => (
+                        <>
+                            <DrawerHeader>Edit Staff</DrawerHeader>
+                            <Divider className='my-4' />
+                            <DrawerBody className='flex flex-col gap-6'>
+                                <Input
+                                    label='Full Name'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter full name'
+                                    isRequired
+                                    value={editFormData.name}
+                                    onValueChange={(value) =>
+                                        setEditFormData({
+                                            ...editFormData,
+                                            name: value,
+                                        })
+                                    }
+                                    classNames={{
+                                        label: "text-primary-500",
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='Phone Number'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter phone number'
+                                    isRequired
+                                    value={editFormData.phone}
+                                    onValueChange={(value) =>
+                                        setEditFormData({
+                                            ...editFormData,
+                                            phone: value,
+                                        })
+                                    }
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='Email Address'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter email (optional)'
+                                    type='email'
+                                    value={editFormData.email}
+                                    onValueChange={(value) =>
+                                        setEditFormData({
+                                            ...editFormData,
+                                            email: value,
+                                        })
+                                    }
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='New Password'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Enter new password (optional)'
+                                    type='password'
+                                    value={editFormData.password}
+                                    onValueChange={(value) =>
+                                        setEditFormData({
+                                            ...editFormData,
+                                            password: value,
+                                        })
+                                    }
+                                    description='Leave empty to keep current password'
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                                <Input
+                                    label='Staff ID'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Staff ID'
+                                    isReadOnly
+                                    value={editFormData.staffId}
+                                    classNames={{
+                                        inputWrapper:
+                                            "border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900",
+                                    }}
+                                />
+                                <Autocomplete
+                                    label='Department'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Select a department'
+                                    isRequired
+                                    selectedKey={editFormData.department}
+                                    onSelectionChange={(key) =>
+                                        setEditFormData({
+                                            ...editFormData,
+                                            department: key as string,
+                                        })
+                                    }
+                                    classNames={{
+                                        base: "w-full",
+                                    }}
+                                >
+                                    {(
+                                        departmentsData?.data?.departments || []
+                                    ).map((dept: DepartmentInterface) => (
+                                        <AutocompleteItem
+                                            key={dept._id}
+                                            textValue={dept.name}
+                                        >
+                                            <div className='flex items-center gap-2'>
+                                                <Building2 className='size-4 text-zinc-400' />
+                                                <span>{dept.name}</span>
+                                            </div>
+                                        </AutocompleteItem>
+                                    ))}
+                                </Autocomplete>
+                                <Select
+                                    label='Gender'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Select gender'
+                                    isRequired
+                                    selectedKeys={
+                                        editFormData.gender
+                                            ? [editFormData.gender]
+                                            : []
+                                    }
+                                    onSelectionChange={(keys) =>
+                                        setEditFormData({
+                                            ...editFormData,
+                                            gender: Array.from(keys)[0] as string,
+                                        })
+                                    }
+                                    classNames={{
+                                        trigger:
+                                            "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                >
+                                    {GENDER_OPTIONS.map((option) => (
+                                        <SelectItem key={option.value}>
+                                            {option.label}
+                                        </SelectItem>
+                                    ))}
+                                </Select>
+                                <Divider />
+                                <div>
+                                    <p className='text-sm font-medium mb-3'>
+                                        Permissions
+                                    </p>
+                                    <CheckboxGroup
+                                        value={editFormData.permissions}
+                                        onValueChange={(value) =>
+                                            setEditFormData({
+                                                ...editFormData,
+                                                permissions: value,
+                                            })
+                                        }
+                                    >
+                                        {PERMISSION_OPTIONS.map((option) => (
+                                            <Checkbox
+                                                key={option.value}
+                                                value={option.value}
+                                                classNames={{
+                                                    label: "text-sm",
+                                                }}
+                                            >
+                                                <div>
+                                                    <p className='text-sm'>
+                                                        {option.label}
+                                                    </p>
+                                                    <p className='text-xs text-zinc-500'>
+                                                        {option.description}
+                                                    </p>
+                                                </div>
+                                            </Checkbox>
+                                        ))}
+                                    </CheckboxGroup>
+                                </div>
+                            </DrawerBody>
+                            <DrawerFooter>
+                                <Button
+                                    color='warning'
+                                    variant='flat'
+                                    onPress={onClose}
+                                    isDisabled={isSubmitting}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    color='warning'
+                                    onPress={() => handleSubmitEdit(onClose)}
+                                    isLoading={isSubmitting}
+                                    isDisabled={!editFormData.name.trim()}
+                                >
+                                    Save Changes
+                                </Button>
+                            </DrawerFooter>
+                        </>
+                    )}
+                </DrawerContent>
+            </Drawer>
+
+            {/* Delete Confirmation Modal */}
+            <Modal
+                isOpen={deleteDisclosure.isOpen}
+                onOpenChange={deleteDisclosure.onOpenChange}
+                size='sm'
+                backdrop='blur'
+            >
+                <ModalContent>
+                    {(onClose) => (
+                        <>
+                            <ModalHeader className='flex flex-col gap-1'>
+                                Delete Staff Member
+                            </ModalHeader>
+                            <ModalBody>
+                                <p className='text-sm'>
+                                    Are you sure you want to delete{" "}
+                                    <span className='font-semibold'>
+                                        {selectedStaff?.name}
+                                    </span>
+                                    ?
+                                </p>
+                                <p className='text-xs text-zinc-500'>
+                                    This action cannot be undone. All associated
+                                    contracts, leave requests, and records will
+                                    be affected.
+                                </p>
+                            </ModalBody>
+                            <ModalFooter>
+                                <Button
+                                    color='danger'
+                                    variant='flat'
+                                    onPress={onClose}
+                                    isDisabled={isDeleting}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    color='danger'
+                                    onPress={() => handleConfirmDelete(onClose)}
+                                    isLoading={isDeleting}
+                                >
+                                    Delete
+                                </Button>
+                            </ModalFooter>
+                        </>
+                    )}
+                </ModalContent>
+            </Modal>
         </AppLayout>
     )
 }
@@ -305,10 +1365,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const sessionData = await getSessionData(request)
 
     if (!authenticated) {
-        return redirect("/login-email")
+        return redirect("/")
     }
 
     const baseUrl = process.env.BASE_URL
+    const url = new URL(request.url)
+    const search = url.searchParams.get("search") || ""
+    const limit = url.searchParams.get("limit") || "10"
+    const page = url.searchParams.get("page") || "1"
 
-    return { sessionData, baseUrl }
+    return { sessionData, baseUrl, search, limit, page }
 }

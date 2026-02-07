@@ -10,9 +10,8 @@ export interface HolidayInterface {
     _id?: string
     name: string
     type: HolidayTypes
-    date?: Date // For varying holidays - specific date for current year
-    fixedMonth?: number // For fixed holidays - month (1-12)
-    fixedDay?: number // For fixed holidays - day (1-31)
+    startDate?: Date // Start date of the holiday
+    endDate?: Date // End date of the holiday (defaults to startDate for single day)
     description?: string // Optional description of the holiday
     createdBy?: string // Staff ID who created the holiday
     createdAt?: Date
@@ -266,9 +265,11 @@ export type Companies = string
 export interface LeaveBalanceInterface {
     _id?: string
     staff: string // Staff ID reference
-    year: number
+    year: number // Derived from periodStart.getFullYear()
+    periodStart: Date // Start of the contract-based leave period
+    periodEnd: Date // End of the contract-based leave period
     leaveType: LeaveTypes
-    allocated: number // Max allowed for the year (30 for annual, caps for others)
+    allocated: number // Max allowed for the period (pro-rated if partial period)
     accrued?: number // For annual leave only - actual accrued amount
     used: number // Days taken
     adjustments?: number // For annual leave only - manual adjustments

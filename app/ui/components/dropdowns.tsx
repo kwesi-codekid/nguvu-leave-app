@@ -50,7 +50,7 @@ export function AuthUserDropdown({
                                 isBordered: false,
                                 size: "sm",
                                 radius: "sm",
-                                className: "bg-zinc-900 text-white text-base",
+                                className: "bg-warning/70 text-white text-base",
                             }}
                             className='transition-transform'
                             description={user?.department}

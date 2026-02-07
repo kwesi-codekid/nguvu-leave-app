@@ -14,9 +14,11 @@ export default [
     route("contracts", "routes/contracts.tsx"),
     route("holidays", "routes/holidays.tsx"),
     route("leave-requests", "routes/leave-requests.tsx"),
+    route("leave-calendar", "routes/leave-calendar.tsx"),
     route("call-ins", "routes/call-ins.tsx"),
     route("reports", "routes/reports.tsx"),
     route("audit-logs", "routes/audit-logs.tsx"),
+    route("ai-assistant", "routes/ai-assistant.tsx"),
     route("profile", "routes/profile.tsx"),
     route("logout", "routes/logout.tsx"),
     route("api-doc", "routes/api-doc.tsx"),
@@ -36,12 +38,19 @@ export default [
     route("api/leave-requests", "routes/api/leave-requests.ts"),
     route("api/leave-requests/:id", "routes/api/leave-requests.[id].ts"),
     route("api/leave-balances", "routes/api/leave-balances.ts"),
+    route("api/leave-calendar", "routes/api/leave-calendar.ts"),
     route("api/call-ins", "routes/api/call-ins.ts"),
     route("api/call-ins/:id", "routes/api/call-ins.[id].ts"),
     route("api/reports", "routes/api/reports.ts"),
     route("api/audit-logs", "routes/api/audit-logs.ts"),
     route("api/audit-logs/:id", "routes/api/audit-logs.[id].ts"),
     route("api/dashboard", "routes/api/dashboard.ts"),
+    route("api/notifications", "routes/api/notifications.ts"),
+    route("api/notifications/:id", "routes/api/notifications.[id].ts"),
+    route("api/ai", "routes/api/ai.ts"),
+
+    // Notifications page
+    route("notifications", "routes/notifications.tsx"),
 
     // Catch-all
     route("*", "routes/$.tsx"),

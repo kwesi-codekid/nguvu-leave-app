@@ -6,7 +6,9 @@ import LeaveBalance from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import Department from "../models/department.model"
 import StaffContract from "../models/staff-contract.model"
+import Holiday from "../models/holiday.model"
 import AuditLogController from "./audit-log.controller"
+import NotificationController from "./notification.controller"
 import SMSService from "../services/sms.service"
 import {
     successResponseObject,
@@ -22,12 +24,28 @@ import {
 
 export class CallInController {
     /**
+     * Check if MongoDB transactions are supported
+     */
+    private static isReplicaSet(): boolean {
+        const topology = mongoose.connection.db?.topology
+        return topology?.description?.type === 'ReplicaSetWithPrimary' || 
+               topology?.description?.type === 'ReplicaSetNoPrimary' ||
+               process.env.USE_TRANSACTIONS === 'true'
+    }
+
+    /**
      * Create a new call-in
      * POST /api/call-ins
      */
     static async createCallIn(req: Request): Promise<ResponseObject> {
-        const session = await mongoose.startSession()
-        session.startTransaction()
+        // Only use transactions if in replica set mode
+        const useTransaction = this.isReplicaSet()
+        let session: any = null
+        
+        if (useTransaction) {
+            session = await mongoose.startSession()
+            session.startTransaction()
+        }
 
         try {
             const {
@@ -38,6 +56,14 @@ export class CallInController {
                 workingDaysRecovered,
             } = req.body
             const user = (req as any).user
+
+            console.log("[CallIn Controller] Received data:", {
+                leaveRequestId,
+                callInStartDate,
+                callInEndDate,
+                reason: reason?.substring(0, 50),
+                reasonLength: reason?.length,
+            })
 
             // Validation
             const errors = []
@@ -72,7 +98,7 @@ export class CallInController {
             }
 
             if (errors.length > 0) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return validationErrorResponseObject(
                     "Validation failed",
                     errors
@@ -86,12 +112,12 @@ export class CallInController {
                 .session(session)
 
             if (!leaveRequest) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject("Leave request not found")
             }
 
             if (leaveRequest.status !== LeaveStatus.APPROVED) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Can only call in staff from approved leave"
                 )
@@ -102,7 +128,7 @@ export class CallInController {
                 leaveRequest.department
             ).session(session)
             if (!department) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject("Department not found")
             }
 
@@ -112,7 +138,7 @@ export class CallInController {
             const hasAdminPermission = user?.permissions?.includes("ADMIN")
 
             if (!isDepartmentHead && !hasHRPermission && !hasAdminPermission) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Only department heads or HR/Admin can create call-ins"
                 )
@@ -125,14 +151,14 @@ export class CallInController {
             const leaveEnd = new Date(leaveRequest.endDate)
 
             if (callStart < leaveStart || callEnd > leaveEnd) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Call-in dates must be within the original leave period"
                 )
             }
 
             if (callStart > callEnd) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Call-in start date must be before or equal to end date"
                 )
@@ -150,9 +176,23 @@ export class CallInController {
             }).session(session)
 
             if (existingCallIn) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Overlapping call-in already exists for this leave period"
+                )
+            }
+
+            // Calculate working days if not provided
+            let calculatedWorkingDays = workingDaysRecovered
+            if (!calculatedWorkingDays) {
+                calculatedWorkingDays = await this.calculateWorkingDaysForCallIn(callStart, callEnd)
+                console.log(`[CallIn] Calculated working days: ${calculatedWorkingDays}`)
+            }
+
+            if (calculatedWorkingDays <= 0) {
+                if (session) await session.abortTransaction()
+                return errorResponseObject(
+                    "Call-in period contains no working days (only weekends/holidays)"
                 )
             }
 
@@ -163,17 +203,22 @@ export class CallInController {
                 department: (leaveRequest.department as any)._id,
                 callInStartDate: callStart,
                 callInEndDate: callEnd,
-                workingDaysRecovered: workingDaysRecovered || undefined, // Will be calculated if not provided
+                workingDaysRecovered: calculatedWorkingDays,
                 reason: reason.trim(),
                 requestedBy: user._id,
                 requestedAt: new Date(),
             }
 
-            const callIn = await CallIn.create([callInData], { session })
+            let callIn
+            if (session) {
+                callIn = await CallIn.create([callInData], { session })
+                await session.commitTransaction()
+            } else {
+                const newCallIn = await CallIn.create(callInData)
+                callIn = [newCallIn]
+            }
 
             // The model's post-save hook will automatically process the call-in and credit the balance
-
-            await session.commitTransaction()
 
             // Populate for response
             const populatedCallIn = await CallIn.findById(callIn[0]._id)
@@ -232,18 +277,35 @@ export class CallInController {
                 // Don't fail the call-in creation if SMS fails
             }
 
+            // Send in-app notification
+            try {
+                const callInDateFormatted = new Date(callStart).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+                await NotificationController.notifyCallIn({
+                    staffId: (leaveRequest.staff as any)._id.toString(),
+                    staffName: (leaveRequest.staff as any).name,
+                    callInId: populatedCallIn._id.toString(),
+                    reason: reason.trim(),
+                    callInDate: callInDateFormatted,
+                    requestedBy: user.name,
+                    departmentId: (leaveRequest.department as any)._id.toString(),
+                })
+            } catch (notifError) {
+                console.error('[CallIn] Failed to send in-app notification:', notifError)
+            }
+
             return successResponseObject(
                 "Call-in created successfully",
                 populatedCallIn
             )
         } catch (error) {
-            await session.abortTransaction()
+            if (session) await session.abortTransaction()
             console.error("Error creating call-in:", error)
             return errorResponseObject(
                 (error as any).message || "Failed to create call-in"
             )
         } finally {
-            session.endSession()
+            if (session) await session.endSession()
         }
     }
 
@@ -392,11 +454,13 @@ export class CallInController {
                 if (newWorkingDays !== oldWorkingDays) {
                     updates.workingDaysRecovered = newWorkingDays
 
-                    // Adjust balance
+                    // Adjust balance (period-based)
+                    const balanceDate = new Date()
                     const balance = await LeaveBalance.findOne({
                         staff: (callIn.staff as any)._id,
-                        year: new Date().getFullYear(),
                         leaveType: leaveRequest.leaveType,
+                        periodStart: { $lte: balanceDate },
+                        periodEnd: { $gte: balanceDate },
                     }).session(session)
 
                     if (balance) {
@@ -576,11 +640,13 @@ export class CallInController {
                 )
             }
 
-            // Reverse balance credit
+            // Reverse balance credit (period-based)
+            const cancelDate = new Date()
             const balance = await LeaveBalance.findOne({
                 staff: callIn.staff,
-                year: new Date().getFullYear(),
                 leaveType: (callIn.leaveRequest as any).leaveType,
+                periodStart: { $lte: cancelDate },
+                periodEnd: { $gte: cancelDate },
             }).session(session)
 
             if (balance) {
@@ -2162,11 +2228,13 @@ export class CallInController {
 
             for (const callIn of recentCallIns) {
                 try {
-                    // Check if already processed by looking at balance
+                    // Check if already processed by looking at balance (period-based)
+                    const checkDate = new Date()
                     const balance = await LeaveBalance.findOne({
                         staff: callIn.staff,
-                        year: new Date().getFullYear(),
                         leaveType: (callIn.leaveRequest as any).leaveType,
+                        periodStart: { $lte: checkDate },
+                        periodEnd: { $gte: checkDate },
                     })
 
                     // Check if the balance notes mention this call-in
@@ -2234,11 +2302,13 @@ export class CallInController {
                 return errorResponseObject("Leave request not found")
             }
 
-            // Get current balance
+            // Get current balance (period-based)
+            const previewDate = new Date()
             const balance = await LeaveBalance.findOne({
                 staff: (leaveRequest.staff as any)._id,
-                year: new Date().getFullYear(),
                 leaveType: leaveRequest.leaveType,
+                periodStart: { $lte: previewDate },
+                periodEnd: { $gte: previewDate },
             })
 
             // Calculate potential impact
@@ -2551,6 +2621,224 @@ export class CallInController {
         }
     }
 
+    /**
+     * Get all call-ins with pagination
+     * GET /api/call-ins
+     */
+    static async getAllCallIns(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+            const { page = 1, limit = 20, search } = req.query
+
+            // Check permissions
+            const canViewAll =
+                user?.permissions?.includes("HR") ||
+                user?.permissions?.includes("ADMIN") ||
+                user?.permissions?.includes("MANAGER")
+
+            if (!canViewAll) {
+                return errorResponseObject("Unauthorized to view call-ins")
+            }
+
+            const query: any = {}
+
+            // Build search query
+            if (search) {
+                const staffIds = await Staff.find({
+                    $or: [
+                        { name: { $regex: search, $options: "i" } },
+                        { staffId: { $regex: search, $options: "i" } },
+                    ],
+                }).select("_id")
+
+                query.staff = { $in: staffIds.map((s) => s._id) }
+            }
+
+            const skip = (Number(page) - 1) * Number(limit)
+
+            const [callIns, total] = await Promise.all([
+                CallIn.find(query)
+                    .populate("staff", "name staffId email")
+                    .populate("leaveRequest", "leaveType startDate endDate workingDays")
+                    .populate("department", "name")
+                    .populate("requestedBy", "name")
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(Number(limit))
+                    .lean(),
+                CallIn.countDocuments(query),
+            ])
+
+            return successResponseObject("Call-ins retrieved successfully", {
+                callIns,
+                pagination: {
+                    page: Number(page),
+                    limit: Number(limit),
+                    total,
+                    totalPages: Math.ceil(total / Number(limit)),
+                },
+            })
+        } catch (error) {
+            console.error("Error getting call-ins:", error)
+            return errorResponseObject("Failed to retrieve call-ins")
+        }
+    }
+
+    /**
+     * Get staff currently on approved leave
+     * GET /api/call-ins?op=on-leave
+     */
+    static async getStaffOnLeave(req: Request): Promise<ResponseObject> {
+        try {
+            const user = (req as any).user
+
+            console.log("[getStaffOnLeave] User:", user?.name, "Permissions:", user?.permissions)
+
+            // Check permissions
+            const canView =
+                user?.permissions?.includes("HR") ||
+                user?.permissions?.includes("ADMIN") ||
+                user?.permissions?.includes("MANAGER")
+
+            if (!canView) {
+                console.log("[getStaffOnLeave] User not authorized")
+                return errorResponseObject("Unauthorized to view staff on leave")
+            }
+
+            const today = new Date()
+            today.setHours(0, 0, 0, 0)
+            console.log("[getStaffOnLeave] Today (midnight):", today.toISOString())
+
+            // Find approved leave requests where today is within the leave period
+            const query = {
+                status: LeaveStatus.APPROVED,
+                startDate: { $lte: today },
+                endDate: { $gte: today },
+            }
+            console.log("[getStaffOnLeave] Query:", JSON.stringify(query, null, 2))
+
+            const onLeaveRequests = await LeaveRequest.find(query)
+                .populate("staff", "name staffId email department")
+                .populate("department", "name")
+                .sort({ startDate: 1 })
+                .lean()
+
+            console.log("[getStaffOnLeave] Found onLeaveRequests:", onLeaveRequests.length)
+
+            // Also check all approved requests to see what's there
+            const allApproved = await LeaveRequest.find({ status: LeaveStatus.APPROVED })
+                .select("staff startDate endDate status leaveType")
+                .lean()
+            console.log("[getStaffOnLeave] All approved requests:", allApproved.length)
+            console.log("[getStaffOnLeave] All approved:", JSON.stringify(allApproved, null, 2))
+
+            // Calculate days remaining for each leave
+            const staffOnLeave = onLeaveRequests.map((leave: any) => {
+                const endDate = new Date(leave.endDate)
+                const diffTime = endDate.getTime() - today.getTime()
+                const daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1
+
+                return {
+                    staff: leave.staff,
+                    leaveRequest: {
+                        _id: leave._id,
+                        leaveType: leave.leaveType,
+                        startDate: leave.startDate,
+                        endDate: leave.endDate,
+                        workingDays: leave.workingDays,
+                    },
+                    department: leave.department,
+                    daysRemaining,
+                }
+            })
+
+            console.log("[getStaffOnLeave] Staff on leave processed:", staffOnLeave.length)
+
+            return successResponseObject("Staff on leave retrieved successfully", {
+                staffOnLeave,
+                count: staffOnLeave.length,
+            })
+        } catch (error) {
+            console.error("Error getting staff on leave:", error)
+            return errorResponseObject("Failed to retrieve staff on leave")
+        }
+    }
+
+    /**
+     * Calculate working days that would be recovered for a call-in
+     * POST /api/call-ins?op=calculate
+     */
+    static async calculateRecoveredDays(req: Request): Promise<ResponseObject> {
+        try {
+            const { leaveRequestId, callInStartDate, callInEndDate } = req.body
+
+            if (!leaveRequestId || !callInStartDate) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "leaveRequestId", message: "Leave request ID is required" },
+                    { field: "callInStartDate", message: "Call-in start date is required" },
+                ])
+            }
+
+            // Get the leave request
+            const leaveRequest = await LeaveRequest.findById(leaveRequestId)
+            if (!leaveRequest) {
+                return errorResponseObject("Leave request not found")
+            }
+
+            // Parse dates
+            const startDate = new Date(callInStartDate)
+            const endDate = callInEndDate ? new Date(callInEndDate) : new Date(callInStartDate)
+
+            // Validate dates are within leave period
+            const leaveStart = new Date(leaveRequest.startDate)
+            const leaveEnd = new Date(leaveRequest.endDate)
+
+            if (startDate < leaveStart || endDate > leaveEnd) {
+                return errorResponseObject(
+                    "Call-in dates must be within the leave period"
+                )
+            }
+
+            // Calculate working days (excluding weekends and holidays)
+            let workingDays = 0
+
+            const current = new Date(startDate)
+            while (current <= endDate) {
+                const dayOfWeek = current.getDay()
+
+                // Skip weekends
+                if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+                    // Check if it's a holiday
+                    const isHoliday = await Holiday.isHoliday(current)
+                    if (!isHoliday) {
+                        workingDays++
+                    }
+                }
+
+                current.setDate(current.getDate() + 1)
+            }
+
+            // Calculate resumption date (day after call-in ends)
+            const resumptionDate = new Date(endDate)
+            resumptionDate.setDate(resumptionDate.getDate() + 1)
+
+            return successResponseObject("Days calculated successfully", {
+                workingDaysRecovered: workingDays,
+                callInStartDate: startDate,
+                callInEndDate: endDate,
+                resumptionDate,
+                originalLeave: {
+                    startDate: leaveRequest.startDate,
+                    endDate: leaveRequest.endDate,
+                    workingDays: leaveRequest.workingDays,
+                },
+            })
+        } catch (error) {
+            console.error("Error calculating recovered days:", error)
+            return errorResponseObject("Failed to calculate recovered days")
+        }
+    }
+
     // Helper method to convert data to CSV
     private static convertToCSV(data: any[]): string {
         if (data.length === 0) return ""
@@ -2571,6 +2859,41 @@ export class CallInController {
         })
 
         return [csvHeaders, ...csvRows].join("\n")
+    }
+
+    /**
+     * Calculate working days for a call-in period
+     * Excludes weekends and holidays
+     */
+    private static async calculateWorkingDaysForCallIn(
+        startDate: Date,
+        endDate: Date
+    ): Promise<number> {
+        let workingDays = 0
+        const current = new Date(startDate)
+        const end = new Date(endDate)
+
+        // Normalize to start of day
+        current.setHours(0, 0, 0, 0)
+        end.setHours(0, 0, 0, 0)
+
+        while (current <= end) {
+            const dayOfWeek = current.getDay()
+
+            // Skip weekends (0 = Sunday, 6 = Saturday)
+            if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+                // Check if it's a holiday
+                const isHoliday = await Holiday.isHoliday(current)
+
+                if (!isHoliday) {
+                    workingDays++
+                }
+            }
+
+            current.setDate(current.getDate() + 1)
+        }
+
+        return workingDays
     }
 }
 

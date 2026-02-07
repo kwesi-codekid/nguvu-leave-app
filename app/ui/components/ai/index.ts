@@ -1,0 +1,8 @@
+export { ChatSidebar } from "./chat-sidebar"
+export { ChatMessage } from "./chat-message"
+export { ChatInput } from "./chat-input"
+export { AIModeTabs } from "./ai-mode-tabs"
+export type { AIMode } from "./ai-mode-tabs"
+export { RecommendationsView } from "./recommendations-view"
+export { PatternsView } from "./patterns-view"
+export { SearchView } from "./search-view"

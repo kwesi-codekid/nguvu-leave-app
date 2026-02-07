@@ -66,8 +66,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         console.log(response.data)
 
-        const sessionData: AuthSessionInterface = {
+        const sessionData = {
             user: {
+                _id: response.data?.data?.staff._id,
                 id: response.data?.data?.staff._id,
                 email: response.data?.data?.staff.email,
                 phone: response.data?.data?.staff.phone,
@@ -75,6 +76,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 department: response.data?.data?.staff.department?.name,
                 permissions: response.data?.data?.staff.permissions,
                 profilePicture: response.data?.data?.staff.profileImage?.url,
+                gender: response.data?.data?.staff.gender,
             },
             token: response.data?.data?.token,
             refreshToken: response.data?.data?.refreshToken,

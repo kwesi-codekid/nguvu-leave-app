@@ -1,5 +1,4 @@
 import { Request } from "express"
-// import { Parser } from "json2csv"
 import LeaveBalance from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import StaffContract from "../models/staff-contract.model"
@@ -19,6 +18,7 @@ import {
     Gender,
     AccountStatus,
 } from "../utils/types"
+import { getContractPeriod, formatPeriod, getTotalMonthsInPeriod } from "../utils/contract-period"
 
 // Type definitions
 interface AuthenticatedRequest extends Request {
@@ -33,6 +33,8 @@ interface BalanceQuery {
     staff?: string | { $in: string[] }
     year?: number
     leaveType?: string
+    periodStart?: Date | { $lte: Date }
+    periodEnd?: Date | { $gte: Date }
 }
 
 interface StaffFilter {
@@ -79,6 +81,9 @@ interface EnhancedBalance {
     id: string
     staff: unknown
     year: number
+    periodStart?: Date
+    periodEnd?: Date
+    periodLabel?: string
     leaveType: string
     allocated: number
     accrued?: number
@@ -95,12 +100,54 @@ interface EnhancedBalance {
     accrualInfo?: {
         currentAccrued: number
         expectedAccrual: number
+        monthlyRate: number
         isBehind: boolean
         nextAccrualAmount: number
     }
 }
 
 export class LeaveBalanceController {
+    /**
+     * Helper: Get a staff member's current contract period
+     */
+    private static async getStaffCurrentPeriod(
+        staffId: string,
+        asOfDate?: Date
+    ): Promise<{ periodStart: Date; periodEnd: Date; contract: any } | null> {
+        const contract = await StaffContract.findOne({
+            staff: staffId,
+            status: ContractStatus.ACTIVE,
+        })
+
+        if (!contract) return null
+
+        const period = getContractPeriod(
+            { startDate: contract.startDate, endDate: contract.endDate },
+            asOfDate || new Date()
+        )
+
+        if (!period) return null
+
+        return { ...period, contract }
+    }
+
+    /**
+     * Helper: Find the current balance for a staff member by period
+     */
+    private static async findCurrentBalance(
+        staffId: string,
+        leaveType: string,
+        asOfDate?: Date
+    ) {
+        const now = asOfDate || new Date()
+        return LeaveBalance.findOne({
+            staff: staffId,
+            leaveType,
+            periodStart: { $lte: now },
+            periodEnd: { $gte: now },
+        })
+    }
+
     /**
      * Get all leave balances for a staff member
      * GET /api/leave-balances/staff/:staffId
@@ -124,7 +171,7 @@ export class LeaveBalanceController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER") ||
-                staffId === user?._id
+                staffId === user?._id?.toString()
 
             if (!canView) {
                 return errorResponseObject(
@@ -138,20 +185,35 @@ export class LeaveBalanceController {
                 return errorResponseObject("Staff member not found")
             }
 
-            // Build query
-            const query: BalanceQuery = { staff: staffId }
+            // Build query - use period-based lookup
+            const now = new Date()
+            let query: any = { staff: staffId }
 
-            // Default to current year if not specified
-            const queryYear = year ? Number(year) : new Date().getFullYear()
-            if (queryYear < 2000 || queryYear > 2100) {
-                return validationErrorResponseObject("Validation failed", [
-                    {
-                        field: "year",
-                        message: "Year must be between 2000 and 2100",
-                    },
-                ])
+            if (year) {
+                // If year specified, find balances where periodStart falls in that year
+                const queryYear = Number(year)
+                if (queryYear < 2000 || queryYear > 2100) {
+                    return validationErrorResponseObject("Validation failed", [
+                        {
+                            field: "year",
+                            message: "Year must be between 2000 and 2100",
+                        },
+                    ])
+                }
+                query.year = queryYear
+            } else {
+                // Default: find balance for current period
+                const period = await this.getStaffCurrentPeriod(staffId)
+                if (period) {
+                    const normalizedStart = new Date(period.periodStart)
+                    normalizedStart.setHours(0, 0, 0, 0)
+                    query.periodStart = normalizedStart
+                } else {
+                    // Fallback: find any active period
+                    query.periodStart = { $lte: now }
+                    query.periodEnd = { $gte: now }
+                }
             }
-            query.year = queryYear
 
             // Filter by leave type if specified
             if (leaveType) {
@@ -171,6 +233,12 @@ export class LeaveBalanceController {
                 query.leaveType = leaveTypeStr
             }
 
+            // Ensure accruals are up to date before fetching
+            const balancesToUpdate = await LeaveBalance.find(query)
+            for (const bal of balancesToUpdate) {
+                await bal.updateAccrual()
+            }
+
             // Get balances
             const balances = await LeaveBalance.find(query)
                 .sort({ leaveType: 1 })
@@ -178,25 +246,32 @@ export class LeaveBalanceController {
 
             // Enhance with virtual fields and additional info
             const enhancedBalances = balances.map((balance) => {
-                const remaining =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(
-                              0,
-                              (balance.accrued || 0) +
-                                  (balance.adjustments || 0) -
-                                  balance.used
-                          )
-                        : Math.max(0, balance.allocated - balance.used)
+                // Annual leave: remaining = accrued + adjustments - used (can be negative if borrowed)
+                // Other types: remaining = allocated + adjustments - used (full allocation available)
+                const base = balance.leaveType === LeaveTypes.ANNUAL
+                    ? (balance.accrued || 0)
+                    : balance.allocated
+                const remaining = base + (balance.adjustments || 0) - balance.used
 
-                const availableForRequest =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(0, 30 - balance.used)
-                        : remaining
+                // Can request up to allocated - used (full allocation, not just accrued)
+                const availableForRequest = Math.max(0, balance.allocated - balance.used)
+
+                // Monthly rate for display
+                const totalPeriodMonths = balance.periodStart && balance.periodEnd
+                    ? getTotalMonthsInPeriod(balance.periodStart, balance.periodEnd)
+                    : 12
+                const monthlyRate = totalPeriodMonths > 0
+                    ? +(balance.allocated / totalPeriodMonths).toFixed(2)
+                    : 0
 
                 return {
                     ...balance,
                     remaining,
                     availableForRequest,
+                    monthlyRate,
+                    periodLabel: balance.periodStart && balance.periodEnd
+                        ? formatPeriod(balance.periodStart, balance.periodEnd)
+                        : `Year ${balance.year}`,
                     utilizationRate:
                         balance.allocated > 0
                             ? Math.round(
@@ -204,15 +279,24 @@ export class LeaveBalanceController {
                               )
                             : 0,
                     isLowBalance: remaining <= 2,
+                    isNegative: remaining < 0,
                     canRequest: availableForRequest > 0,
                 }
             })
+
+            // Get period label for summary
+            const periodLabel = enhancedBalances.length > 0 && enhancedBalances[0].periodLabel
+                ? enhancedBalances[0].periodLabel
+                : `Year ${year || now.getFullYear()}`
 
             // Summary statistics
             const summary = {
                 staffName: staff.name,
                 staffId: staff.staffId,
-                year: queryYear,
+                year: enhancedBalances[0]?.year || (year ? Number(year) : now.getFullYear()),
+                periodLabel,
+                periodStart: enhancedBalances[0]?.periodStart,
+                periodEnd: enhancedBalances[0]?.periodEnd,
                 totalAvailable: enhancedBalances.reduce(
                     (sum, b) => sum + b.availableForRequest,
                     0
@@ -270,20 +354,27 @@ export class LeaveBalanceController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER") ||
-                staffId === user?._id
+                staffId === user?._id?.toString()
 
             if (!canView) {
                 return errorResponseObject("Unauthorized to view this balance")
             }
 
-            const queryYear = year ? Number(year) : new Date().getFullYear()
-
-            // Get balance
-            const balance = await LeaveBalance.findOne({
-                staff: staffId,
-                year: queryYear,
-                leaveType,
-            }).populate("staff", "name staffId email")
+            // Get balance - period-based
+            let balance
+            if (year) {
+                const queryYear = Number(year)
+                balance = await LeaveBalance.findOne({
+                    staff: staffId,
+                    year: queryYear,
+                    leaveType,
+                }).populate("staff", "name staffId email")
+            } else {
+                balance = await this.findCurrentBalance(staffId, leaveType)
+                if (balance) {
+                    await balance.populate("staff", "name staffId email")
+                }
+            }
 
             if (!balance) {
                 return errorResponseObject("Leave balance not found")
@@ -311,6 +402,9 @@ export class LeaveBalanceController {
                 id: balance._id,
                 staff: balance.staff,
                 year: balance.year,
+                periodStart: balance.periodStart,
+                periodEnd: balance.periodEnd,
+                periodLabel: balance.periodLabel,
                 leaveType: balance.leaveType,
                 allocated: balance.allocated,
                 accrued: balance.accrued,
@@ -329,17 +423,25 @@ export class LeaveBalanceController {
                 updatedAt: balance.updatedAt,
             }
 
-            // Add accrual info for annual leave
-            if (leaveType === LeaveTypes.ANNUAL) {
-                const currentMonth = new Date().getMonth() + 1
-                const expectedAccrual = Math.min(30, currentMonth * 2.5)
+            // Add accrual info for all leave types
+            if (balance.periodStart) {
+                const periodMonths = getTotalMonthsInPeriod(balance.periodStart, balance.periodEnd)
+                const monthlyRate = periodMonths > 0 ? balance.allocated / periodMonths : 0
+                const now = new Date()
+                const periodStart = new Date(balance.periodStart)
+                const monthsElapsed = Math.max(1,
+                    (now.getFullYear() - periodStart.getFullYear()) * 12 +
+                    (now.getMonth() - periodStart.getMonth()) + 1
+                )
+                const expectedAccrual = Math.min(balance.allocated, monthsElapsed * monthlyRate)
                 enhancedBalance.accrualInfo = {
                     currentAccrued: balance.accrued || 0,
                     expectedAccrual,
+                    monthlyRate: +monthlyRate.toFixed(2),
                     isBehind: (balance.accrued || 0) < expectedAccrual,
                     nextAccrualAmount: Math.min(
-                        2.5,
-                        30 - (balance.accrued || 0)
+                        monthlyRate,
+                        balance.allocated - (balance.accrued || 0)
                     ),
                 }
             }
@@ -392,8 +494,6 @@ export class LeaveBalanceController {
                 return errorResponseObject("Department not found")
             }
 
-            const queryYear = year ? Number(year) : new Date().getFullYear()
-
             // Get all staff in department
             const staffInDept = await Staff.find({
                 department: departmentId,
@@ -403,7 +503,6 @@ export class LeaveBalanceController {
             if (staffInDept.length === 0) {
                 return successResponseObject("No staff in department", {
                     department: department.name,
-                    year: queryYear,
                     staffCount: 0,
                     balances: [],
                 })
@@ -411,11 +510,23 @@ export class LeaveBalanceController {
 
             const staffIds = staffInDept.map((s) => s._id)
 
-            // Get all balances for department staff
-            const balances = await LeaveBalance.find({
-                staff: { $in: staffIds },
-                year: queryYear,
-            }).lean()
+            // Get balances - period-based (each staff may have different periods)
+            const now = new Date()
+            let balances
+            if (year) {
+                const queryYear = Number(year)
+                balances = await LeaveBalance.find({
+                    staff: { $in: staffIds },
+                    year: queryYear,
+                }).lean()
+            } else {
+                // Find current period balances for all staff
+                balances = await LeaveBalance.find({
+                    staff: { $in: staffIds },
+                    periodStart: { $lte: now },
+                    periodEnd: { $gte: now },
+                }).lean()
+            }
 
             // Group by leave type
             const byLeaveType: Record<string, LeaveTypeSummary> = {}
@@ -425,6 +536,7 @@ export class LeaveBalanceController {
                     staffId?: string
                     name?: string
                     staffCode?: string
+                    periodLabel?: string
                     balances: Array<{
                         leaveType: string
                         used: number
@@ -454,19 +566,11 @@ export class LeaveBalanceController {
                 }
 
                 const remaining =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(
-                              0,
-                              (balance.accrued || 0) +
-                                  (balance.adjustments || 0) -
-                                  balance.used
-                          )
-                        : Math.max(0, balance.allocated - balance.used)
+                    (balance.accrued || 0) +
+                    (balance.adjustments || 0) -
+                    balance.used
 
-                const available =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(0, 30 - balance.used)
-                        : remaining
+                const available = Math.max(0, balance.allocated - balance.used)
 
                 byLeaveType[balance.leaveType].totalAllocated +=
                     balance.allocated
@@ -490,6 +594,9 @@ export class LeaveBalanceController {
                         staffId: staffMember?._id?.toString(),
                         name: staffMember?.name,
                         staffCode: staffMember?.staffId,
+                        periodLabel: balance.periodStart && balance.periodEnd
+                            ? formatPeriod(balance.periodStart, balance.periodEnd)
+                            : undefined,
                         balances: [],
                     }
                 }
@@ -517,7 +624,6 @@ export class LeaveBalanceController {
 
             const summary = {
                 department: department.name,
-                year: queryYear,
                 staffCount: staffInDept.length,
                 byLeaveType: Object.values(byLeaveType),
                 byStaff: Object.values(byStaff),
@@ -549,7 +655,7 @@ export class LeaveBalanceController {
      */
     static async initializeBalances(req: Request): Promise<ResponseObject> {
         try {
-            const { staffId, year } = req.body
+            const { staffId } = req.body
             const user = (req as AuthenticatedRequest).user
 
             // Check HR/Admin permission
@@ -569,16 +675,6 @@ export class LeaveBalanceController {
                 ])
             }
 
-            const balanceYear = year || new Date().getFullYear()
-            if (balanceYear < 2000 || balanceYear > 2100) {
-                return validationErrorResponseObject("Validation failed", [
-                    {
-                        field: "year",
-                        message: "Year must be between 2000 and 2100",
-                    },
-                ])
-            }
-
             // Verify staff exists
             const staff = await Staff.findById(staffId)
             if (!staff) {
@@ -590,24 +686,44 @@ export class LeaveBalanceController {
                 staff: staffId,
                 status: ContractStatus.ACTIVE
             })
-            
+
             if (!activeContract) {
                 return errorResponseObject(
                     "Staff member must have an active contract to initialize balances"
                 )
             }
 
-            // Check if balances already exist
+            // Get the current period from contract dates
+            const period = getContractPeriod(
+                { startDate: activeContract.startDate, endDate: activeContract.endDate },
+                new Date()
+            )
+
+            if (!period) {
+                return errorResponseObject(
+                    "Cannot determine leave period from contract dates"
+                )
+            }
+
+            // Check if balances already exist for this period
+            const normalizedStart = new Date(period.periodStart)
+            normalizedStart.setHours(0, 0, 0, 0)
+
             const existingBalances = await LeaveBalance.find({
                 staff: staffId,
-                year: balanceYear,
+                periodStart: normalizedStart,
             })
 
             if (existingBalances.length > 0) {
                 return errorResponseObject(
-                    `Leave balances already exist for ${balanceYear}`
+                    `Leave balances already exist for period ${formatPeriod(period.periodStart, period.periodEnd)}`
                 )
             }
+
+            // Calculate pro-rated allocation
+            const totalPeriodMonths = getTotalMonthsInPeriod(period.periodStart, period.periodEnd)
+            const proRateFactor = totalPeriodMonths / 12
+            const periodLabel = formatPeriod(period.periodStart, period.periodEnd)
 
             // Initialize balances
             const balancesToCreate = []
@@ -615,35 +731,38 @@ export class LeaveBalanceController {
             // Annual leave - starts at 0, will accrue
             balancesToCreate.push({
                 staff: staffId,
-                year: balanceYear,
+                periodStart: normalizedStart,
+                periodEnd: period.periodEnd,
                 leaveType: LeaveTypes.ANNUAL,
-                allocated: 30, // Max that can be accrued
-                accrued: 0, // Will accrue monthly
+                allocated: totalPeriodMonths * 2.5,
+                accrued: 0,
                 used: 0,
                 adjustments: 0,
-                notes: `Initialized for year ${balanceYear}`,
+                notes: `Initialized for period ${periodLabel}`,
                 createdBy: user._id,
             })
 
             // Sick leave
             balancesToCreate.push({
                 staff: staffId,
-                year: balanceYear,
+                periodStart: normalizedStart,
+                periodEnd: period.periodEnd,
                 leaveType: LeaveTypes.SICK,
-                allocated: LEAVE_CAPS[LeaveTypes.SICK],
+                allocated: Math.round(LEAVE_CAPS[LeaveTypes.SICK] * proRateFactor),
                 used: 0,
-                notes: `Initialized for year ${balanceYear}`,
+                notes: `Initialized for period ${periodLabel}`,
                 createdBy: user._id,
             })
 
             // Bereavement leave
             balancesToCreate.push({
                 staff: staffId,
-                year: balanceYear,
+                periodStart: normalizedStart,
+                periodEnd: period.periodEnd,
                 leaveType: LeaveTypes.BEREAVEMENT,
-                allocated: LEAVE_CAPS[LeaveTypes.BEREAVEMENT],
+                allocated: Math.round(LEAVE_CAPS[LeaveTypes.BEREAVEMENT] * proRateFactor),
                 used: 0,
-                notes: `Initialized for year ${balanceYear}`,
+                notes: `Initialized for period ${periodLabel}`,
                 createdBy: user._id,
             })
 
@@ -651,21 +770,23 @@ export class LeaveBalanceController {
             if (staff.gender === Gender.MALE) {
                 balancesToCreate.push({
                     staff: staffId,
-                    year: balanceYear,
+                    periodStart: normalizedStart,
+                    periodEnd: period.periodEnd,
                     leaveType: LeaveTypes.PATERNITY,
-                    allocated: LEAVE_CAPS[LeaveTypes.PATERNITY],
+                    allocated: Math.round(LEAVE_CAPS[LeaveTypes.PATERNITY] * proRateFactor),
                     used: 0,
-                    notes: `Initialized for year ${balanceYear}`,
+                    notes: `Initialized for period ${periodLabel}`,
                     createdBy: user._id,
                 })
             } else if (staff.gender === Gender.FEMALE) {
                 balancesToCreate.push({
                     staff: staffId,
-                    year: balanceYear,
+                    periodStart: normalizedStart,
+                    periodEnd: period.periodEnd,
                     leaveType: LeaveTypes.MATERNITY,
-                    allocated: LEAVE_CAPS[LeaveTypes.MATERNITY],
+                    allocated: Math.round(LEAVE_CAPS[LeaveTypes.MATERNITY] * proRateFactor),
                     used: 0,
-                    notes: `Initialized for year ${balanceYear}`,
+                    notes: `Initialized for period ${periodLabel}`,
                     createdBy: user._id,
                 })
             }
@@ -675,35 +796,14 @@ export class LeaveBalanceController {
                 balancesToCreate
             )
 
-            // If current year, update annual leave accrual based on contract start date
-            if (balanceYear === new Date().getFullYear()) {
-                const annualBalance = createdBalances.find(
-                    (b) => b.leaveType === LeaveTypes.ANNUAL
-                )
-                if (annualBalance) {
-                    const contractStartDate = new Date(activeContract.startDate)
-                    const currentDate = new Date()
-                    let accruedDays = 0
-                    
-                    // Only accrue if contract started in current year
-                    if (contractStartDate.getFullYear() === currentDate.getFullYear()) {
-                        // Calculate months from contract start to current month
-                        const startMonth = contractStartDate.getMonth()
-                        const currentMonth = currentDate.getMonth()
-                        const monthsWorked = Math.max(0, currentMonth - startMonth + 1)
-                        accruedDays = Math.min(30, monthsWorked * 2.5)
-                    } else if (contractStartDate.getFullYear() < currentDate.getFullYear()) {
-                        // Contract from previous year, use standard calculation
-                        accruedDays = Math.min(30, (currentDate.getMonth() + 1) * 2.5)
-                    }
-                    // If contract starts in future (shouldn't happen but safe check), no accrual
-                    
-                    await LeaveBalance.findByIdAndUpdate(annualBalance._id, {
-                        $set: {
-                            accrued: accruedDays,
-                        },
-                    })
-                }
+            // Update annual leave accrual
+            const annualBalance = await LeaveBalance.findOne({
+                staff: staffId,
+                periodStart: normalizedStart,
+                leaveType: LeaveTypes.ANNUAL,
+            })
+            if (annualBalance) {
+                await annualBalance.updateAccrual()
             }
 
             // Log to audit
@@ -714,11 +814,13 @@ export class LeaveBalanceController {
                 performedBy: user._id,
                 performedByName: (user?.name as string) || "System",
                 performedByEmail: (user?.email as string) || "system@leave.com",
-                description: `Initialized leave balances for ${staff.name} for year ${balanceYear}`,
+                description: `Initialized leave balances for ${staff.name} for period ${periodLabel}`,
                 metadata: {
                     staffName: staff.name,
                     staffId: staff.staffId,
-                    year: balanceYear,
+                    periodStart: period.periodStart,
+                    periodEnd: period.periodEnd,
+                    periodLabel,
                     balanceTypes: balancesToCreate.map((b) => b.leaveType),
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
@@ -729,7 +831,9 @@ export class LeaveBalanceController {
                 "Leave balances initialized successfully",
                 {
                     staffName: staff.name,
-                    year: balanceYear,
+                    periodLabel,
+                    periodStart: period.periodStart,
+                    periodEnd: period.periodEnd,
                     balancesCreated: createdBalances.length,
                 }
             )
@@ -794,17 +898,12 @@ export class LeaveBalanceController {
                 )
             }
 
-            // Get current year annual leave balance
-            const currentYear = new Date().getFullYear()
-            const balance = await LeaveBalance.findOne({
-                staff: staffId,
-                year: currentYear,
-                leaveType: LeaveTypes.ANNUAL,
-            })
+            // Get current period annual leave balance
+            const balance = await this.findCurrentBalance(staffId, LeaveTypes.ANNUAL)
 
             if (!balance) {
                 return errorResponseObject(
-                    "Annual leave balance not found for current year"
+                    "Annual leave balance not found for current period"
                 )
             }
 
@@ -813,8 +912,10 @@ export class LeaveBalanceController {
             const newAdjustment = oldAdjustment + adjustment
 
             // Ensure total doesn't go negative
-            const totalAvailable =
-                (balance.accrued || 0) + newAdjustment - balance.used
+            const baseAmount = balance.leaveType === LeaveTypes.ANNUAL
+                ? (balance.accrued || 0)
+                : balance.allocated
+            const totalAvailable = baseAmount + newAdjustment - balance.used
             if (totalAvailable < 0) {
                 return errorResponseObject(
                     "Adjustment would result in negative balance"
@@ -860,7 +961,7 @@ export class LeaveBalanceController {
                     staffId: staff?.staffId,
                     adjustment,
                     reason,
-                    year: currentYear,
+                    periodLabel: balance.periodLabel,
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
@@ -875,6 +976,7 @@ export class LeaveBalanceController {
                     used: balance.used,
                     remaining: balance.remaining,
                     availableForRequest: balance.availableForRequest,
+                    periodLabel: balance.periodLabel,
                 },
                 adjustment: {
                     amount: adjustment,
@@ -894,7 +996,7 @@ export class LeaveBalanceController {
      */
     static async resetBalance(req: Request): Promise<ResponseObject> {
         try {
-            const { staffId, leaveType, year, reason } = req.body
+            const { staffId, leaveType, reason } = req.body
             const user = (req as AuthenticatedRequest).user
 
             // Check Admin permission
@@ -935,14 +1037,8 @@ export class LeaveBalanceController {
                 )
             }
 
-            const resetYear = year || new Date().getFullYear()
-
-            // Find balance
-            const balance = await LeaveBalance.findOne({
-                staff: staffId,
-                year: resetYear,
-                leaveType,
-            })
+            // Find current period balance
+            const balance = await this.findCurrentBalance(staffId, leaveType)
 
             if (!balance) {
                 return errorResponseObject("Leave balance not found")
@@ -956,25 +1052,8 @@ export class LeaveBalanceController {
                 adjustments: balance.adjustments,
             }
 
-            // Reset based on leave type
-            if (leaveType === LeaveTypes.ANNUAL) {
-                // Annual leave resets to 0
-                balance.allocated = 30 // Max that can be accrued
-                balance.accrued = 0
-                balance.used = 0
-                balance.adjustments = 0
-                balance.lastAccrualAt = undefined
-            } else {
-                // Other leaves reset to yearly cap
-                balance.allocated = LEAVE_CAPS[leaveType as LeaveTypes] || 0
-                balance.used = 0
-            }
-
-            const timestamp = new Date().toISOString()
-            const resetNote = `${timestamp}: Balance reset - ${reason}`
-            balance.notes = resetNote // Replace notes with reset info
-
-            await balance.save()
+            // Reset using period method
+            await balance.resetForNewPeriod()
 
             // Get staff info
             const staff = await Staff.findById(staffId)
@@ -998,8 +1077,8 @@ export class LeaveBalanceController {
                     staffName: staff?.name,
                     staffId: staff?.staffId,
                     leaveType,
-                    year: resetYear,
                     reason,
+                    periodLabel: balance.periodLabel,
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
@@ -1014,8 +1093,9 @@ export class LeaveBalanceController {
                     used: balance.used,
                     adjustments: balance.adjustments,
                     remaining: balance.remaining,
+                    periodLabel: balance.periodLabel,
                 },
-                resetAt: timestamp,
+                resetAt: new Date().toISOString(),
             })
         } catch (error) {
             console.error("Error resetting balance:", error)
@@ -1048,21 +1128,18 @@ export class LeaveBalanceController {
                 ])
             }
 
-            // Get current year annual leave balance
-            const currentYear = new Date().getFullYear()
-            const balance = await LeaveBalance.findOne({
-                staff: staffId,
-                year: currentYear,
-                leaveType: LeaveTypes.ANNUAL,
-            })
+            const effectiveDate = asOfDate ? new Date(asOfDate) : new Date()
+
+            // Get current period annual leave balance
+            const balance = await this.findCurrentBalance(staffId, LeaveTypes.ANNUAL, effectiveDate)
 
             if (!balance) {
                 return errorResponseObject(
-                    "Annual leave balance not found for current year"
+                    "Annual leave balance not found for current period"
                 )
             }
 
-            // Get staff's active contract to check start date
+            // Get staff's active contract to check
             const contract = await StaffContract.findOne({
                 staff: staffId,
                 status: ContractStatus.ACTIVE
@@ -1074,32 +1151,11 @@ export class LeaveBalanceController {
                 )
             }
 
-            const effectiveDate = asOfDate ? new Date(asOfDate) : new Date()
             const oldAccrued = balance.accrued || 0
-            const contractStartDate = new Date(contract.startDate)
-            let newAccrued = oldAccrued
 
-            // Only update accrual if contract started before or on the effective date
-            if (contractStartDate <= effectiveDate) {
-                // Check if this is the first year of the contract
-                if (contractStartDate.getFullYear() === currentYear) {
-                    // Pro-rated accrual for first year employees
-                    const startMonth = contractStartDate.getMonth()
-                    const effectiveMonth = effectiveDate.getMonth()
-                    const monthsWorked = Math.max(0, effectiveMonth - startMonth + 1)
-                    newAccrued = Math.min(30, monthsWorked * 2.5)
-                    
-                    if (newAccrued !== oldAccrued) {
-                        balance.accrued = newAccrued
-                        balance.lastAccrualAt = effectiveDate
-                        await balance.save()
-                    }
-                } else {
-                    // Standard accrual for existing employees
-                    await balance.updateAccrual(effectiveDate)
-                    newAccrued = balance.accrued || 0
-                }
-            }
+            // Update accrual using period-based method
+            await balance.updateAccrual(effectiveDate)
+            const newAccrued = balance.accrued || 0
 
             const accrualIncreased = newAccrued > oldAccrued
 
@@ -1128,8 +1184,8 @@ export class LeaveBalanceController {
                     metadata: {
                         staffName: staff?.name,
                         staffId: staff?.staffId,
-                        year: currentYear,
                         asOfDate: effectiveDate,
+                        periodLabel: balance.periodLabel,
                     },
                     ipAddress: req.ip || req.socket.remoteAddress,
                     userAgent: req.headers["user-agent"],
@@ -1147,6 +1203,7 @@ export class LeaveBalanceController {
                     increased: newAccrued - oldAccrued,
                     lastAccrualAt: balance.lastAccrualAt,
                     remaining: balance.remaining,
+                    periodLabel: balance.periodLabel,
                 }
             )
         } catch (error) {
@@ -1161,7 +1218,6 @@ export class LeaveBalanceController {
      */
     static async processMonthlyAccruals(req: Request): Promise<ResponseObject> {
         try {
-            const { year, month } = req.body
             const user = (req as AuthenticatedRequest).user
 
             // Check Admin/System permission
@@ -1174,94 +1230,37 @@ export class LeaveBalanceController {
                 )
             }
 
-            const processYear = year || new Date().getFullYear()
-            const asOfDate = month
-                ? new Date(processYear, month - 1, 28) // Use 28th to avoid month-end issues
-                : new Date()
+            const now = new Date()
 
-            // Get all staff with active contracts
-            const activeContracts = await StaffContract.find({
-                status: ContractStatus.ACTIVE,
+            // Find all annual leave balances where current date falls within the period
+            const balances = await LeaveBalance.find({
+                leaveType: LeaveTypes.ANNUAL,
+                periodStart: { $lte: now },
+                periodEnd: { $gte: now },
             })
-                .select("staff")
-                .distinct("staff")
 
-            if (activeContracts.length === 0) {
-                return successResponseObject("No active contracts found", {
+            if (balances.length === 0) {
+                return successResponseObject("No active period balances found", {
                     processed: 0,
-                    year: processYear,
                 })
             }
-
-            // Get active staff details
-            const activeStaff = await Staff.find({
-                _id: { $in: activeContracts },
-                status: AccountStatus.ACTIVE,
-            }).select("_id")
-
-            const activeStaffIds = activeStaff.map((s) => s._id)
-
-            // Find all annual leave balances for active staff with contracts
-            const balances = await LeaveBalance.find({
-                staff: { $in: activeStaffIds },
-                year: processYear,
-                leaveType: LeaveTypes.ANNUAL,
-            })
 
             let updatedCount = 0
             const updateResults = []
 
             for (const balance of balances) {
-                // Get the staff's contract to check start date
-                const contract = await StaffContract.findOne({
-                    staff: balance.staff,
-                    status: ContractStatus.ACTIVE
-                })
-                
-                if (!contract) continue // Skip if no active contract
-                
                 const oldAccrued = balance.accrued || 0
-                const contractStartDate = new Date(contract.startDate)
-                
-                // Only process accrual if contract started before or during the processing date
-                if (contractStartDate <= asOfDate) {
-                    // Check if this is the first year of the contract
-                    if (contractStartDate.getFullYear() === processYear) {
-                        // Pro-rated accrual for first year employees
-                        const startMonth = contractStartDate.getMonth()
-                        const processMonth = asOfDate.getMonth()
-                        const monthsWorked = Math.max(0, processMonth - startMonth + 1)
-                        const expectedAccrual = Math.min(30, monthsWorked * 2.5)
-                        
-                        // Update only if expected is more than current
-                        if (expectedAccrual > oldAccrued) {
-                            balance.accrued = expectedAccrual
-                            balance.lastAccrualAt = asOfDate
-                            await balance.save()
-                            
-                            updatedCount++
-                            updateResults.push({
-                                staffId: balance.staff,
-                                previousAccrual: oldAccrued,
-                                newAccrual: expectedAccrual,
-                                increase: expectedAccrual - oldAccrued,
-                            })
-                        }
-                    } else {
-                        // Standard accrual for existing employees
-                        await balance.updateAccrual(asOfDate)
-                        const newAccrued = balance.accrued || 0
-                        
-                        if (newAccrued > oldAccrued) {
-                            updatedCount++
-                            updateResults.push({
-                                staffId: balance.staff,
-                                previousAccrual: oldAccrued,
-                                newAccrual: newAccrued,
-                                increase: newAccrued - oldAccrued,
-                            })
-                        }
-                    }
+                await balance.updateAccrual(now)
+                const newAccrued = balance.accrued || 0
+
+                if (newAccrued > oldAccrued) {
+                    updatedCount++
+                    updateResults.push({
+                        staffId: balance.staff,
+                        previousAccrual: oldAccrued,
+                        newAccrual: newAccrued,
+                        increase: newAccrued - oldAccrued,
+                    })
                 }
             }
 
@@ -1277,11 +1276,9 @@ export class LeaveBalanceController {
                         (user?.email as string) || "system@leave.com",
                     description: `Processed monthly accruals for ${updatedCount} staff`,
                     metadata: {
-                        year: processYear,
-                        month: month || new Date().getMonth() + 1,
                         processedCount: updatedCount,
                         totalEligible: balances.length,
-                        asOfDate,
+                        processedAt: now,
                     },
                     ipAddress: req.ip || req.socket.remoteAddress || "SYSTEM",
                     userAgent: req.headers["user-agent"] || "System Process",
@@ -1292,11 +1289,9 @@ export class LeaveBalanceController {
                 "Monthly accruals processed successfully",
                 {
                     summary: {
-                        year: processYear,
-                        month: month || new Date().getMonth() + 1,
                         totalEligibleStaff: balances.length,
                         totalUpdated: updatedCount,
-                        processedAt: new Date(),
+                        processedAt: now,
                     },
                     details: updateResults,
                 }
@@ -1359,29 +1354,19 @@ export class LeaveBalanceController {
                 )
             }
 
-            // Get current year balance
-            const currentYear = new Date().getFullYear()
-            const balance = await LeaveBalance.findOne({
-                staff: staffId,
-                year: currentYear,
-                leaveType,
-            })
+            // Get current period balance
+            const balance = await this.findCurrentBalance(staffId, leaveType)
 
             if (!balance) {
                 return errorResponseObject(
-                    `${leaveType} balance not found for current year`
+                    `${leaveType} balance not found for current period`
                 )
             }
 
             // Check if sufficient balance
             if (!balance.canRequest(days)) {
-                const available =
-                    leaveType === LeaveTypes.ANNUAL
-                        ? balance.availableForRequest
-                        : balance.remaining
-
                 return errorResponseObject(
-                    `Insufficient ${leaveType} balance. Available: ${available} days, Requested: ${days} days`
+                    `Insufficient ${leaveType} balance. Available: ${balance.availableForRequest} days, Requested: ${days} days`
                 )
             }
 
@@ -1430,7 +1415,7 @@ export class LeaveBalanceController {
                     days,
                     reason: reason || "Leave approved",
                     leaveRequestId,
-                    year: currentYear,
+                    periodLabel: balance.periodLabel,
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
@@ -1443,6 +1428,7 @@ export class LeaveBalanceController {
                     used: balance.used,
                     remaining: balance.remaining,
                     availableForRequest: balance.availableForRequest,
+                    periodLabel: balance.periodLabel,
                 },
                 transaction: {
                     type: "debit",
@@ -1509,17 +1495,12 @@ export class LeaveBalanceController {
                 )
             }
 
-            // Get current year balance
-            const currentYear = new Date().getFullYear()
-            const balance = await LeaveBalance.findOne({
-                staff: staffId,
-                year: currentYear,
-                leaveType,
-            })
+            // Get current period balance
+            const balance = await this.findCurrentBalance(staffId, leaveType)
 
             if (!balance) {
                 return errorResponseObject(
-                    `${leaveType} balance not found for current year`
+                    `${leaveType} balance not found for current period`
                 )
             }
 
@@ -1560,7 +1541,7 @@ export class LeaveBalanceController {
                     days,
                     reason: creditReason,
                     leaveRequestId,
-                    year: currentYear,
+                    periodLabel: balance.periodLabel,
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
@@ -1573,6 +1554,7 @@ export class LeaveBalanceController {
                     used: balance.used,
                     remaining: balance.remaining,
                     availableForRequest: balance.availableForRequest,
+                    periodLabel: balance.periodLabel,
                 },
                 transaction: {
                     type: "credit",
@@ -1610,7 +1592,7 @@ export class LeaveBalanceController {
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER") ||
-                staffId === user?._id
+                staffId === user?._id?.toString()
 
             if (!canCheck) {
                 return errorResponseObject("Unauthorized to check availability")
@@ -1632,35 +1614,26 @@ export class LeaveBalanceController {
                 ])
             }
 
-            // Get current year balance
-            const currentYear = new Date().getFullYear()
-            const balance = await LeaveBalance.findOne({
-                staff: staffId,
-                year: currentYear,
-                leaveType,
-            })
+            // Get current period balance
+            const balance = await this.findCurrentBalance(
+                staffId as string,
+                leaveType as string
+            )
 
             if (!balance) {
                 return successResponseObject("Balance check completed", {
                     available: false,
-                    reason: `No ${leaveType} balance found for current year`,
+                    reason: `No ${leaveType} balance found for current period`,
                     balance: null,
                 })
             }
 
             const canRequest = balance.canRequest(requestedDays)
-            const availableDays =
-                leaveType === LeaveTypes.ANNUAL
-                    ? balance.availableForRequest
-                    : balance.remaining
+            const availableDays = balance.availableForRequest
 
             let reason = ""
             if (!canRequest) {
-                if (leaveType === LeaveTypes.ANNUAL) {
-                    reason = `Cannot exceed 30 days total annual leave. Available: ${availableDays} days`
-                } else {
-                    reason = `Insufficient balance. Available: ${availableDays} days`
-                }
+                reason = `Insufficient balance. Available: ${availableDays} days`
             }
 
             return successResponseObject("Availability checked successfully", {
@@ -1675,6 +1648,7 @@ export class LeaveBalanceController {
                     remaining: balance.remaining,
                     availableForRequest: availableDays,
                     requestedDays,
+                    periodLabel: balance.periodLabel,
                 },
             })
         } catch (error) {
@@ -1747,27 +1721,19 @@ export class LeaveBalanceController {
                 )
             }
 
-            // Get current year balance
-            const currentYear = new Date().getFullYear()
-            const balance = await LeaveBalance.findOne({
-                staff: staffId,
-                year: currentYear,
-                leaveType,
-            })
+            // Get current period balance
+            const balance = await this.findCurrentBalance(staffId, leaveType)
 
             if (!balance) {
                 return successResponseObject("Validation completed", {
                     valid: false,
-                    reason: `No ${leaveType} balance found for current year`,
+                    reason: `No ${leaveType} balance found for current period`,
                     staffName: staff.name,
                 })
             }
 
             const canRequest = balance.canRequest(days)
-            const availableDays =
-                leaveType === LeaveTypes.ANNUAL
-                    ? balance.availableForRequest
-                    : balance.remaining
+            const availableDays = balance.availableForRequest
 
             const validationResult = {
                 valid: canRequest,
@@ -1777,6 +1743,7 @@ export class LeaveBalanceController {
                 availableDays,
                 currentUsed: balance.used,
                 allocated: balance.allocated,
+                periodLabel: balance.periodLabel,
                 reason: canRequest
                     ? "Request is valid"
                     : `Insufficient balance. Available: ${availableDays} days, Requested: ${days} days`,
@@ -1813,8 +1780,6 @@ export class LeaveBalanceController {
                 )
             }
 
-            const reportYear = year ? Number(year) : new Date().getFullYear()
-
             // Build staff filter
             const staffFilter: StaffFilter = { status: AccountStatus.ACTIVE }
             if (department && typeof department === "string") {
@@ -1836,19 +1801,29 @@ export class LeaveBalanceController {
 
             if (activeStaff.length === 0) {
                 return successResponseObject("No active staff found", {
-                    year: reportYear,
                     totalStaff: 0,
                     summary: [],
                 })
             }
 
             const staffIds = activeStaff.map((s) => s._id)
+            const now = new Date()
 
-            // Get all balances
-            const balances = await LeaveBalance.find({
-                staff: { $in: staffIds },
-                year: reportYear,
-            }).lean()
+            // Get balances - either by year or current period
+            let balances
+            if (year) {
+                const reportYear = Number(year)
+                balances = await LeaveBalance.find({
+                    staff: { $in: staffIds },
+                    year: reportYear,
+                }).lean()
+            } else {
+                balances = await LeaveBalance.find({
+                    staff: { $in: staffIds },
+                    periodStart: { $lte: now },
+                    periodEnd: { $gte: now },
+                }).lean()
+            }
 
             // Aggregate by leave type
             const byLeaveType: Record<string, LeaveTypeSummary> = {}
@@ -1873,19 +1848,11 @@ export class LeaveBalanceController {
                 if (!lt) continue
 
                 const remaining =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(
-                              0,
-                              (balance.accrued || 0) +
-                                  (balance.adjustments || 0) -
-                                  balance.used
-                          )
-                        : Math.max(0, balance.allocated - balance.used)
+                    (balance.accrued || 0) +
+                    (balance.adjustments || 0) -
+                    balance.used
 
-                const available =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(0, 30 - balance.used)
-                        : remaining
+                const available = Math.max(0, balance.allocated - balance.used)
 
                 lt.totalStaff++
                 lt.totalAllocated += balance.allocated
@@ -1930,7 +1897,6 @@ export class LeaveBalanceController {
 
             // Overall summary
             const overallSummary = {
-                year: reportYear,
                 totalStaff: activeStaff.length,
                 totalBalanceRecords: balances.length,
                 overallUtilization:
@@ -1993,7 +1959,7 @@ export class LeaveBalanceController {
             }
 
             const thresholdDays = Number(threshold)
-            const currentYear = new Date().getFullYear()
+            const now = new Date()
 
             // Get all active staff with contracts
             const activeContracts = await StaffContract.find({
@@ -2011,24 +1977,20 @@ export class LeaveBalanceController {
 
             const staffIds = activeStaff.map((s) => s._id)
 
-            // Get all current year balances
+            // Get all current period balances
             const balances = await LeaveBalance.find({
                 staff: { $in: staffIds },
-                year: currentYear,
+                periodStart: { $lte: now },
+                periodEnd: { $gte: now },
             }).lean()
 
             const lowBalanceAlerts = []
 
             for (const balance of balances) {
                 const remaining =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(
-                              0,
-                              (balance.accrued || 0) +
-                                  (balance.adjustments || 0) -
-                                  balance.used
-                          )
-                        : Math.max(0, balance.allocated - balance.used)
+                    (balance.accrued || 0) +
+                    (balance.adjustments || 0) -
+                    balance.used
 
                 if (remaining <= thresholdDays) {
                     const staffMember = activeStaff.find(
@@ -2131,7 +2093,7 @@ export class LeaveBalanceController {
     }
 
     /**
-     * Get year-end report
+     * Get year-end report (supports both year and period queries)
      * GET /api/leave-balances/report/year-end
      */
     static async getYearEndReport(req: Request): Promise<ResponseObject> {
@@ -2153,7 +2115,7 @@ export class LeaveBalanceController {
                 ? Number(year)
                 : new Date().getFullYear() - 1
 
-            // Get all balances for the year
+            // Get all balances for the year (via denormalized year field)
             const balances = await LeaveBalance.find({ year: reportYear })
                 .populate("staff", "name staffId department")
                 .lean()
@@ -2247,7 +2209,7 @@ export class LeaveBalanceController {
                     breakdown: s.byType,
                 }))
 
-            // Unused leave (staff who didn't use any leave)
+            // Unused leave
             statistics.unusedLeave = staffUsageArray
                 .filter((s) => s.totalUsed === 0)
                 .map((s) => ({
@@ -2273,8 +2235,6 @@ export class LeaveBalanceController {
                             balances.reduce((sum, b) => sum + b.allocated, 0)) *
                             100
                     ) || 0,
-                message:
-                    "All balances will reset for the new year. Annual leave starts at 0, other leaves at full allocation.",
             }
 
             return successResponseObject("Year-end report generated", {
@@ -2310,10 +2270,16 @@ export class LeaveBalanceController {
                 )
             }
 
-            const reportYear = year ? Number(year) : new Date().getFullYear()
+            const now = new Date()
 
             // Build query
-            const query: BalanceQuery = { year: reportYear }
+            let query: any = {}
+            if (year) {
+                query.year = Number(year)
+            } else {
+                query.periodStart = { $lte: now }
+                query.periodEnd = { $gte: now }
+            }
 
             if (
                 leaveType &&
@@ -2324,10 +2290,9 @@ export class LeaveBalanceController {
             }
 
             // Get staff filter if department specified
-            let staffIds: string[] = []
             if (department && typeof department === "string") {
                 const deptStaff = await Staff.find({ department }).select("_id")
-                staffIds = deptStaff.map((s) => s._id.toString())
+                const staffIds = deptStaff.map((s) => s._id.toString())
 
                 if (staffIds.length > 0) {
                     query.staff = { $in: staffIds }
@@ -2349,14 +2314,9 @@ export class LeaveBalanceController {
             // Calculate utilization metrics
             const utilizationData = balances.map((balance) => {
                 const remaining =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(
-                              0,
-                              (balance.accrued || 0) +
-                                  (balance.adjustments || 0) -
-                                  balance.used
-                          )
-                        : Math.max(0, balance.allocated - balance.used)
+                    (balance.accrued || 0) +
+                    (balance.adjustments || 0) -
+                    balance.used
 
                 const utilizationRate =
                     balance.allocated > 0
@@ -2376,6 +2336,9 @@ export class LeaveBalanceController {
                     used: balance.used,
                     remaining,
                     utilizationRate,
+                    periodLabel: balance.periodStart && balance.periodEnd
+                        ? formatPeriod(balance.periodStart, balance.periodEnd)
+                        : undefined,
                     category:
                         utilizationRate === 0
                             ? "unused"
@@ -2404,7 +2367,6 @@ export class LeaveBalanceController {
 
             // Summary statistics
             const summary = {
-                year: reportYear,
                 totalRecords: utilizationData.length,
                 averageUtilization:
                     Math.round(
@@ -2439,145 +2401,22 @@ export class LeaveBalanceController {
     }
 
     /**
-     * Initialize balances for new year
+     * Initialize balances for new period (replaces initializeNewYear)
      * POST /api/leave-balances/initialize-new-year
      */
     static async initializeNewYear(req: Request): Promise<ResponseObject> {
         try {
-            const { year } = req.body
             const user = (req as AuthenticatedRequest).user
 
             // Check Admin permission
             if (!user?.permissions?.includes("ADMIN")) {
                 return errorResponseObject(
-                    "Unauthorized. Only Admin can initialize new year"
+                    "Unauthorized. Only Admin can initialize new periods"
                 )
             }
 
-            if (!year || year < 2000 || year > 2100) {
-                return validationErrorResponseObject("Validation failed", [
-                    {
-                        field: "year",
-                        message: "Valid year between 2000 and 2100 is required",
-                    },
-                ])
-            }
-
-            // Check if year already initialized
-            const existingBalances = await LeaveBalance.findOne({ year })
-            if (existingBalances) {
-                return errorResponseObject(
-                    `Year ${year} has already been initialized`
-                )
-            }
-
-            // Get all active staff with contracts
-            const activeContracts = await StaffContract.find({
-                status: ContractStatus.ACTIVE,
-            })
-                .select("staff")
-                .distinct("staff")
-
-            const activeStaff = await Staff.find({
-                _id: { $in: activeContracts },
-                status: AccountStatus.ACTIVE,
-            })
-
-            if (activeStaff.length === 0) {
-                return successResponseObject("No active staff to initialize", {
-                    year,
-                    staffInitialized: 0,
-                })
-            }
-
-            const balancesToCreate = []
-
-            for (const staff of activeStaff) {
-                // Get staff's active contract to determine accrual
-                const contract = await StaffContract.findOne({
-                    staff: staff._id,
-                    status: ContractStatus.ACTIVE
-                })
-                
-                // Calculate initial accrual based on contract start date if initializing current year
-                let initialAccrual = 0
-                if (contract && year === new Date().getFullYear()) {
-                    const contractStartDate = new Date(contract.startDate)
-                    if (contractStartDate.getFullYear() === year) {
-                        // Contract started this year, pro-rate the accrual
-                        const startMonth = contractStartDate.getMonth()
-                        const currentMonth = new Date().getMonth()
-                        const monthsWorked = Math.max(0, currentMonth - startMonth + 1)
-                        initialAccrual = Math.min(30, monthsWorked * 2.5)
-                    } else if (contractStartDate.getFullYear() < year) {
-                        // Contract from previous year, give accrual for months passed
-                        initialAccrual = Math.min(30, (new Date().getMonth() + 1) * 2.5)
-                    }
-                }
-                
-                // Annual leave - starts at 0 or prorated based on contract
-                balancesToCreate.push({
-                    staff: staff._id,
-                    year,
-                    leaveType: LeaveTypes.ANNUAL,
-                    allocated: 30,
-                    accrued: initialAccrual,
-                    used: 0,
-                    adjustments: 0,
-                    notes: `New year initialization for ${year}`,
-                    createdBy: user._id,
-                })
-
-                // Sick leave - full allocation
-                balancesToCreate.push({
-                    staff: staff._id,
-                    year,
-                    leaveType: LeaveTypes.SICK,
-                    allocated: LEAVE_CAPS[LeaveTypes.SICK],
-                    used: 0,
-                    notes: `New year initialization for ${year}`,
-                    createdBy: user._id,
-                })
-
-                // Bereavement leave - full allocation
-                balancesToCreate.push({
-                    staff: staff._id,
-                    year,
-                    leaveType: LeaveTypes.BEREAVEMENT,
-                    allocated: LEAVE_CAPS[LeaveTypes.BEREAVEMENT],
-                    used: 0,
-                    notes: `New year initialization for ${year}`,
-                    createdBy: user._id,
-                })
-
-                // Gender-specific leaves
-                if (staff.gender === Gender.MALE) {
-                    balancesToCreate.push({
-                        staff: staff._id,
-                        year,
-                        leaveType: LeaveTypes.PATERNITY,
-                        allocated: LEAVE_CAPS[LeaveTypes.PATERNITY],
-                        used: 0,
-                        notes: `New year initialization for ${year}`,
-                        createdBy: user._id,
-                    })
-                } else if (staff.gender === Gender.FEMALE) {
-                    balancesToCreate.push({
-                        staff: staff._id,
-                        year,
-                        leaveType: LeaveTypes.MATERNITY,
-                        allocated: LEAVE_CAPS[LeaveTypes.MATERNITY],
-                        used: 0,
-                        notes: `New year initialization for ${year}`,
-                        createdBy: user._id,
-                    })
-                }
-            }
-
-            // Bulk create
-            const createdBalances = await LeaveBalance.insertMany(
-                balancesToCreate
-            )
+            // Use the model's createNewPeriodBalances which checks all active contracts
+            const count = await LeaveBalance.createNewPeriodBalances()
 
             // Log to audit
             await AuditLogController.createAuditLog({
@@ -2587,34 +2426,28 @@ export class LeaveBalanceController {
                 performedBy: user._id,
                 performedByName: user.name as string,
                 performedByEmail: user.email as string,
-                description: `Initialized leave balances for ${activeStaff.length} staff for year ${year}`,
+                description: `Created new period balances for ${count} staff members`,
                 metadata: {
-                    year,
-                    staffCount: activeStaff.length,
-                    balancesCreated: createdBalances.length,
-                    leaveTypes: [
-                        ...new Set(balancesToCreate.map((b) => b.leaveType)),
-                    ],
+                    staffCount: count,
+                    processedAt: new Date(),
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
             })
 
-            return successResponseObject("New year initialized successfully", {
-                year,
-                staffInitialized: activeStaff.length,
-                totalBalancesCreated: createdBalances.length,
+            return successResponseObject("New period balances created successfully", {
+                staffInitialized: count,
                 message:
-                    "All staff have been initialized with fresh leave balances. Annual leave starts at 0 and will accrue monthly.",
+                    "Staff with new contract anniversary periods have been initialized with fresh leave balances.",
             })
         } catch (error) {
-            console.error("Error initializing new year:", error)
-            return errorResponseObject("Failed to initialize new year")
+            console.error("Error initializing new periods:", error)
+            return errorResponseObject("Failed to initialize new periods")
         }
     }
 
     /**
-     * Process year end
+     * Process year end (kept for backward compatibility, works with period data)
      * POST /api/leave-balances/process-year-end
      */
     static async processYearEnd(req: Request): Promise<ResponseObject> {
@@ -2631,7 +2464,7 @@ export class LeaveBalanceController {
 
             const yearToClose = year || new Date().getFullYear() - 1
 
-            // Get all balances for the year
+            // Get all balances for the year (using denormalized year field)
             const balances = await LeaveBalance.find({ year: yearToClose })
 
             if (balances.length === 0) {
@@ -2701,8 +2534,6 @@ export class LeaveBalanceController {
             return successResponseObject("Year-end processed successfully", {
                 year: yearToClose,
                 statistics,
-                message:
-                    "Year-end processing complete. No balances carried forward. Initialize new year to create fresh balances.",
                 processedAt: new Date(),
             })
         } catch (error) {
@@ -2733,7 +2564,7 @@ export class LeaveBalanceController {
             const canView =
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
-                staffId === user?._id
+                staffId === user?._id?.toString()
 
             if (!canView) {
                 return errorResponseObject(
@@ -2742,7 +2573,7 @@ export class LeaveBalanceController {
             }
 
             // Build query
-            const query: BalanceQuery = { staff: staffId }
+            const query: any = { staff: staffId }
 
             if (year) {
                 query.year = Number(year)
@@ -2758,7 +2589,7 @@ export class LeaveBalanceController {
 
             // Get balances with notes (transaction history)
             const balances = await LeaveBalance.find(query)
-                .sort({ year: -1, leaveType: 1 })
+                .sort({ periodStart: -1, leaveType: 1 })
                 .lean()
 
             // Parse transaction history from notes
@@ -2793,6 +2624,11 @@ export class LeaveBalanceController {
 
                 history.push({
                     year: balance.year,
+                    periodStart: balance.periodStart,
+                    periodEnd: balance.periodEnd,
+                    periodLabel: balance.periodStart && balance.periodEnd
+                        ? formatPeriod(balance.periodStart, balance.periodEnd)
+                        : `Year ${balance.year}`,
                     leaveType: balance.leaveType,
                     summary: {
                         allocated: balance.allocated,
@@ -2800,16 +2636,11 @@ export class LeaveBalanceController {
                         used: balance.used,
                         adjustments: balance.adjustments || 0,
                         remaining:
-                            balance.leaveType === LeaveTypes.ANNUAL
-                                ? Math.max(
-                                      0,
-                                      (balance.accrued || 0) +
-                                          (balance.adjustments || 0) -
-                                          balance.used
-                                  )
-                                : Math.max(0, balance.allocated - balance.used),
+                            (balance.accrued || 0) +
+                            (balance.adjustments || 0) -
+                            balance.used,
                     },
-                    transactions: transactions.reverse(), // Show newest first
+                    transactions: transactions.reverse(),
                     createdAt: balance.createdAt,
                     updatedAt: balance.updatedAt,
                 })
@@ -2855,7 +2686,7 @@ export class LeaveBalanceController {
                 )
             }
 
-            const exportYear = year ? Number(year) : new Date().getFullYear()
+            const now = new Date()
 
             // Build staff filter
             let staffIds: string[] = []
@@ -2865,7 +2696,13 @@ export class LeaveBalanceController {
             }
 
             // Build query
-            const query: BalanceQuery = { year: exportYear }
+            let query: any = {}
+            if (year) {
+                query.year = Number(year)
+            } else {
+                query.periodStart = { $lte: now }
+                query.periodEnd = { $gte: now }
+            }
             if (staffIds.length > 0) {
                 query.staff = { $in: staffIds }
             }
@@ -2890,14 +2727,9 @@ export class LeaveBalanceController {
             // Prepare data for export
             const exportData = balances.map((balance) => {
                 const remaining =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? Math.max(
-                              0,
-                              (balance.accrued || 0) +
-                                  (balance.adjustments || 0) -
-                                  balance.used
-                          )
-                        : Math.max(0, balance.allocated - balance.used)
+                    (balance.accrued || 0) +
+                    (balance.adjustments || 0) -
+                    balance.used
 
                 const staffData = balance.staff as any
 
@@ -2907,6 +2739,9 @@ export class LeaveBalanceController {
                     Email: staffData.email || "N/A",
                     Department: staffData.department?.name || "N/A",
                     Year: balance.year,
+                    "Period": balance.periodStart && balance.periodEnd
+                        ? formatPeriod(balance.periodStart, balance.periodEnd)
+                        : `Year ${balance.year}`,
                     "Leave Type": balance.leaveType,
                     Allocated: balance.allocated,
                     Accrued: balance.accrued || 0,
@@ -2929,14 +2764,14 @@ export class LeaveBalanceController {
 
                 return successResponseObject("Balances exported successfully", {
                     format: "csv",
-                    filename: `leave_balances_${exportYear}_${Date.now()}.csv`,
+                    filename: `leave_balances_${Date.now()}.csv`,
                     data: csv,
                     recordCount: exportData.length,
                 })
             } else {
                 return successResponseObject("Balances exported successfully", {
                     format: "json",
-                    filename: `leave_balances_${exportYear}_${Date.now()}.json`,
+                    filename: `leave_balances_${Date.now()}.json`,
                     data: exportData,
                     recordCount: exportData.length,
                 })

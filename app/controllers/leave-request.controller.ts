@@ -8,6 +8,7 @@ import Department from "../models/department.model"
 import LeaveBalance from "../models/leave-balance.model"
 import Holiday from "../models/holiday.model"
 import AuditLogController from "./audit-log.controller"
+import NotificationController from "./notification.controller"
 import SMSService from "../services/sms.service"
 import {
     successResponseObject,
@@ -109,6 +110,7 @@ export class LeaveRequestController {
             // Date validation and computation
             if (startDate && (endDate || numberOfDays)) {
                 const start = new Date(startDate)
+                console.log(`[LeaveRequest] Validating dates: start=${startDate}, end=${actualEndDate}, startDay=${start.toDateString()}`)
                 
                 // Compute end date if numberOfDays provided
                 if (numberOfDays && !endDate && errors.length === 0) {
@@ -118,6 +120,7 @@ export class LeaveRequestController {
                         computedEndDate = true
                         console.log(`[LeaveRequest] Computed end date: ${actualEndDate} for ${numberOfDays} working days`)
                     } catch (error) {
+                        console.error(`[LeaveRequest] Error computing end date:`, error)
                         errors.push({
                             field: "numberOfDays",
                             message: "Failed to compute end date for the given number of days",
@@ -126,8 +129,10 @@ export class LeaveRequestController {
                 }
                 
                 const end = new Date(actualEndDate)
+                console.log(`[LeaveRequest] Validating dates: end=${actualEndDate}, endDay=${end.toDateString()}`)
 
                 if (isNaN(start.getTime())) {
+                    console.error(`[LeaveRequest] Invalid start date: ${startDate}`)
                     errors.push({
                         field: "startDate",
                         message: "Invalid start date format",
@@ -135,6 +140,7 @@ export class LeaveRequestController {
                 }
 
                 if (isNaN(end.getTime())) {
+                    console.error(`[LeaveRequest] Invalid end date: ${actualEndDate}`)
                     errors.push({
                         field: "endDate",
                         message: "Invalid end date format",
@@ -142,6 +148,7 @@ export class LeaveRequestController {
                 }
 
                 if (start > end) {
+                    console.error(`[LeaveRequest] Start date after end date: ${start} > ${end}`)
                     errors.push({
                         field: "endDate",
                         message:
@@ -152,6 +159,7 @@ export class LeaveRequestController {
                 // Check start date is current year or future
                 const currentYear = new Date().getFullYear()
                 if (start.getFullYear() < currentYear) {
+                    console.error(`[LeaveRequest] Start date in past year: ${start.getFullYear()} < ${currentYear}`)
                     errors.push({
                         field: "startDate",
                         message: "Leave start date cannot be in past years",
@@ -160,7 +168,9 @@ export class LeaveRequestController {
                 
                 // Check if start date is a weekend
                 const startDayOfWeek = start.getDay()
+                console.log(`[LeaveRequest] Start date day of week: ${startDayOfWeek} (0=Sunday, 6=Saturday)`)
                 if (startDayOfWeek === 0 || startDayOfWeek === 6) {
+                    console.error(`[LeaveRequest] Start date is weekend: ${startDayOfWeek}`)
                     errors.push({
                         field: "startDate",
                         message: "Leave cannot start on a weekend (Saturday or Sunday)",
@@ -169,7 +179,9 @@ export class LeaveRequestController {
                 
                 // Check if start date is a holiday
                 const isStartDateHoliday = await Holiday.isHoliday(start)
+                console.log(`[LeaveRequest] Is start date holiday? ${isStartDateHoliday}`)
                 if (isStartDateHoliday) {
+                    console.error(`[LeaveRequest] Start date is holiday: ${start}`)
                     errors.push({
                         field: "startDate",
                         message: "Leave cannot start on a public holiday",
@@ -178,7 +190,9 @@ export class LeaveRequestController {
                 
                 // Check if end date is a weekend
                 const endDayOfWeek = end.getDay()
+                console.log(`[LeaveRequest] End date day of week: ${endDayOfWeek} (0=Sunday, 6=Saturday)`)
                 if (endDayOfWeek === 0 || endDayOfWeek === 6) {
+                    console.error(`[LeaveRequest] End date is weekend: ${endDayOfWeek}`)
                     errors.push({
                         field: "endDate",
                         message: "Leave cannot end on a weekend (Saturday or Sunday)",
@@ -187,7 +201,9 @@ export class LeaveRequestController {
                 
                 // Check if end date is a holiday
                 const isEndDateHoliday = await Holiday.isHoliday(end)
+                console.log(`[LeaveRequest] Is end date holiday? ${isEndDateHoliday}`)
                 if (isEndDateHoliday) {
+                    console.error(`[LeaveRequest] End date is holiday: ${end}`)
                     errors.push({
                         field: "endDate",
                         message: "Leave cannot end on a public holiday",
@@ -232,6 +248,19 @@ export class LeaveRequestController {
                 )
             }
 
+            // Check leave dates do not exceed contract end date
+            if (activeContract.endDate) {
+                const contractEnd = new Date(activeContract.endDate)
+                contractEnd.setHours(23, 59, 59, 999)
+                const leaveEnd = new Date(actualEndDate)
+                if (leaveEnd > contractEnd) {
+                    if (session) await session.abortTransaction()
+                    return errorResponseObject(
+                        `Leave end date cannot exceed your contract end date (${contractEnd.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })})`
+                    )
+                }
+            }
+
             // Check document requirements
             if (LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(leaveType)) {
                 if (!attachments || attachments.length === 0) {
@@ -262,49 +291,62 @@ export class LeaveRequestController {
                 new Date(actualEndDate)
             )
 
+            console.log(`[LeaveRequest] Working days result:`, workingDaysResult)
+
             if (workingDaysResult.total === 0) {
+                console.error(`[LeaveRequest] No working days found in date range`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Selected dates contain no working days"
                 )
             }
 
-            // Check leave balance
-            const startYear = new Date(startDate).getFullYear()
+            // Check leave balance (period-based lookup)
+            const leaveStartDate = new Date(startDate)
+            console.log(`[LeaveRequest] Looking for balance for staff: ${user._id}, leaveType: ${leaveType}, date: ${leaveStartDate}`)
+            
             const balanceQuery = LeaveBalance.findOne({
                 staff: user._id,
-                year: startYear,
                 leaveType,
+                periodStart: { $lte: leaveStartDate },
+                periodEnd: { $gte: leaveStartDate },
             })
             const balance = session ? await balanceQuery.session(session) : await balanceQuery
 
+            console.log(`[LeaveRequest] Balance found:`, balance)
+
             if (!balance) {
+                console.error(`[LeaveRequest] No balance found for staff: ${user._id}, leaveType: ${leaveType}`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
-                    `No ${leaveType} balance found for year ${startYear}`
+                    `No ${leaveType} balance found for the current leave period`
                 )
             }
 
-            if (!balance.canRequest(workingDaysResult.total)) {
-                const available =
-                    leaveType === LeaveTypes.ANNUAL
-                        ? balance.availableForRequest
-                        : balance.remaining
+            const canRequest = balance.canRequest(workingDaysResult.total)
+            console.log(`[LeaveRequest] Can request ${workingDaysResult.total} days?`, canRequest)
+            console.log(`[LeaveRequest] Available for request: ${balance.availableForRequest}, Remaining: ${balance.remaining}`)
 
+            if (!canRequest) {
+                console.error(`[LeaveRequest] Insufficient balance. Available: ${balance.availableForRequest}, Requested: ${workingDaysResult.total}`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
-                    `Insufficient leave balance. Available: ${available} days, Requested: ${workingDaysResult.total} days`
+                    `Insufficient leave balance. Available: ${balance.availableForRequest} days, Requested: ${workingDaysResult.total} days`
                 )
             }
 
             // Check for overlapping requests
+            console.log(`[LeaveRequest] Checking for overlapping requests...`)
             const overlapping = await LeaveRequest.getOverlappingRequests(
                 user._id,
                 new Date(startDate),
                 new Date(actualEndDate)
             )
 
+            console.log(`[LeaveRequest] Overlapping requests found:`, overlapping)
+
             if (overlapping.length > 0) {
+                console.error(`[LeaveRequest] Found ${overlapping.length} overlapping requests`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "You have overlapping leave requests for the selected dates"
@@ -344,7 +386,7 @@ export class LeaveRequestController {
                 leaveType,
                 startDate: new Date(startDate),
                 endDate: new Date(actualEndDate),
-                startYear,
+                startYear: new Date(startDate).getFullYear(),
                 workingDays: workingDaysResult.total,
                 workingDaysBreakdown: workingDaysResult.breakdown,
                 status: LeaveStatus.PENDING,
@@ -455,6 +497,24 @@ export class LeaveRequestController {
                 }
             } else {
                 console.log('[LeaveRequest] Position has no endorser configured')
+            }
+
+            // Send in-app notification
+            try {
+                const startDateFormatted = new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                const endDateFormatted = new Date(actualEndDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+                await NotificationController.notifyLeaveSubmitted({
+                    staffId: user._id,
+                    staffName: staff.name,
+                    leaveRequestId: leaveRequest[0]._id.toString(),
+                    leaveType,
+                    startDate: startDateFormatted,
+                    endDate: endDateFormatted,
+                    departmentId: department._id.toString(),
+                })
+            } catch (notifError) {
+                console.error('[LeaveRequest] Failed to send notification:', notifError)
             }
 
             return successResponseObject(
@@ -593,7 +653,23 @@ export class LeaveRequestController {
                         "End date must be after or equal to start date"
                     )
                 }
-                
+
+                // Check leave dates do not exceed contract end date
+                const updateContract = await StaffContract.findOne({
+                    staff: request.staff,
+                    status: ContractStatus.ACTIVE,
+                })
+                if (updateContract?.endDate) {
+                    const contractEnd = new Date(updateContract.endDate)
+                    contractEnd.setHours(23, 59, 59, 999)
+                    if (newEndDate > contractEnd) {
+                        if (session) await session.abortTransaction()
+                        return errorResponseObject(
+                            `Leave end date cannot exceed your contract end date (${contractEnd.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })})`
+                        )
+                    }
+                }
+
                 // Check if new start date is a weekend
                 const startDayOfWeek = newStartDate.getDay()
                 if (startDayOfWeek === 0 || startDayOfWeek === 6) {
@@ -645,11 +721,12 @@ export class LeaveRequestController {
                         )
                     }
 
-                    // Re-check balance
+                    // Re-check balance (period-based)
                     const balance = await LeaveBalance.findOne({
                         staff: request.staff,
-                        year: newStartDate.getFullYear(),
                         leaveType: request.leaveType,
+                        periodStart: { $lte: newStartDate },
+                        periodEnd: { $gte: newStartDate },
                     }).session(session)
 
                     if (!balance?.canRequest(workingDaysResult.total)) {
@@ -1078,8 +1155,34 @@ export class LeaveRequestController {
                 console.error('Failed to send SMS notification:', smsError)
             }
 
+            // Send in-app notifications
+            try {
+                const startDateFormatted = new Date(request.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                const endDateFormatted = new Date(request.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+                if (wasAutoApproved) {
+                    await NotificationController.notifyLeaveApproved({
+                        staffId: (request.staff as any)._id.toString(),
+                        leaveRequestId: id,
+                        leaveType: request.leaveType,
+                        startDate: startDateFormatted,
+                        endDate: endDateFormatted,
+                        approvedBy: user.name,
+                    })
+                } else {
+                    await NotificationController.notifyLeaveEndorsed({
+                        staffId: (request.staff as any)._id.toString(),
+                        leaveRequestId: id,
+                        leaveType: request.leaveType,
+                        endorsedBy: user.name,
+                    })
+                }
+            } catch (notifError) {
+                console.error('Failed to send in-app notification:', notifError)
+            }
+
             return successResponseObject(
-                wasAutoApproved 
+                wasAutoApproved
                     ? "Leave request approved successfully (single-level approval)"
                     : "Leave request endorsed successfully",
                 endorsedRequest
@@ -1206,6 +1309,19 @@ export class LeaveRequestController {
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
             })
+
+            // Send in-app notification
+            try {
+                await NotificationController.notifyLeaveRejected({
+                    staffId: (request.staff as any)._id.toString(),
+                    leaveRequestId: id,
+                    leaveType: request.leaveType,
+                    rejectedBy: user.name,
+                    reason: reason.trim(),
+                })
+            } catch (notifError) {
+                console.error('Failed to send in-app notification:', notifError)
+            }
 
             return successResponseObject(
                 "Leave request rejected by endorser",
@@ -1358,6 +1474,23 @@ export class LeaveRequestController {
                 console.error('[ApproveRequest] Failed to send SMS notification:', smsError)
             }
 
+            // Send in-app notification
+            try {
+                const startDateFormatted = new Date(request.startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                const endDateFormatted = new Date(request.endDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+                await NotificationController.notifyLeaveApproved({
+                    staffId: (request.staff as any)._id.toString(),
+                    leaveRequestId: id,
+                    leaveType: request.leaveType,
+                    startDate: startDateFormatted,
+                    endDate: endDateFormatted,
+                    approvedBy: user.name,
+                })
+            } catch (notifError) {
+                console.error('Failed to send in-app notification:', notifError)
+            }
+
             return successResponseObject(
                 "Leave request approved successfully",
                 approvedRequest
@@ -1483,6 +1616,19 @@ export class LeaveRequestController {
                 ipAddress: req.ip || req.socket.remoteAddress,
                 userAgent: req.headers["user-agent"],
             })
+
+            // Send in-app notification
+            try {
+                await NotificationController.notifyLeaveRejected({
+                    staffId: (request.staff as any)._id.toString(),
+                    leaveRequestId: id,
+                    leaveType: request.leaveType,
+                    rejectedBy: user.name,
+                    reason: reason.trim(),
+                })
+            } catch (notifError) {
+                console.error('Failed to send in-app notification:', notifError)
+            }
 
             return successResponseObject(
                 "Leave request rejected by approver",
@@ -2346,6 +2492,7 @@ export class LeaveRequestController {
             }
 
             const result = await this.calculateWorkingDaysInternal(start, end)
+            const holidaysInRange = await this.getHolidaysInRange(start, end)
 
             return successResponseObject(
                 "Working days calculated successfully",
@@ -2360,7 +2507,9 @@ export class LeaveRequestController {
                     workingDays: result.total,
                     breakdown: result.breakdown,
                     includesWeekends: this.countWeekends(start, end) > 0,
-                    holidays: await this.getHolidaysInRange(start, end),
+                    holidays: holidaysInRange,
+                    skippedHolidayDates: result.skippedHolidays || [],
+                    holidaysExcluded: (result.skippedHolidays || []).length,
                 }
             )
         } catch (error) {
@@ -2458,7 +2607,11 @@ export class LeaveRequestController {
             const formatDate = (date: Date) => {
                 return date.toISOString().split('T')[0]
             }
-            
+
+            // Calculate working days and get holidays in the period
+            const workingDaysResult = await this.calculateWorkingDaysInternal(start, actualEndDate)
+            const holidaysInRange = await this.getHolidaysInRange(start, actualEndDate)
+
             return successResponseObject(
                 "Period and resumption date calculated successfully",
                 {
@@ -2469,7 +2622,14 @@ export class LeaveRequestController {
                     },
                     resumptionDate: formatDate(resumptionDate),
                     computedEndDate,
-                    requestedDays: numberOfDays || null
+                    requestedDays: numberOfDays || null,
+                    // Include working days info
+                    workingDays: workingDaysResult.total,
+                    workingDaysBreakdown: workingDaysResult.breakdown,
+                    // Include holidays info
+                    holidaysInPeriod: holidaysInRange.map(h => h.name),
+                    holidayDatesSkipped: workingDaysResult.skippedHolidays || [],
+                    totalHolidaysExcluded: (workingDaysResult.skippedHolidays || []).length,
                 }
             )
         } catch (error) {
@@ -2707,12 +2867,14 @@ export class LeaveRequestController {
                 leaveRequest = [newRequest]
             }
 
-            // Debit balance if not skipping validation
+            // Debit balance if not skipping validation (period-based)
             if (!skipValidation) {
+                const emergencyStartDate = new Date(startDate)
                 const balanceQuery = LeaveBalance.findOne({
                     staff: staffId,
-                    year: new Date(startDate).getFullYear(),
                     leaveType,
+                    periodStart: { $lte: emergencyStartDate },
+                    periodEnd: { $gte: emergencyStartDate },
                 })
                 const balance = session ? await balanceQuery.session(session) : await balanceQuery
 
@@ -2821,31 +2983,49 @@ export class LeaveRequestController {
     private static async calculateWorkingDaysInternal(
         startDate: Date,
         endDate: Date
-    ): Promise<{ total: number; breakdown: any }> {
+    ): Promise<{ total: number; breakdown: any; skippedHolidays?: string[] }> {
+        console.log(`[LeaveRequest] Calculating working days from ${startDate.toDateString()} to ${endDate.toDateString()}`)
+        
         const breakdown: any = {}
         let total = 0
+        const skippedHolidays: string[] = []
 
-        const currentDate = new Date(startDate)
+        // Normalize to start of day
+        const currentDate = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate())
+        const normalizedEndDate = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate())
 
-        while (currentDate <= endDate) {
+        while (currentDate <= normalizedEndDate) {
             const year = currentDate.getFullYear()
+            const dayOfWeek = currentDate.getDay()
+            console.log(`[LeaveRequest] Checking date: ${currentDate.toDateString()}, dayOfWeek: ${dayOfWeek}`)
 
             // Skip weekends
-            const dayOfWeek = currentDate.getDay()
             if (dayOfWeek !== 0 && dayOfWeek !== 6) {
                 // Check if it's a holiday
                 const isHoliday = await Holiday.isHoliday(currentDate)
+                console.log(`[LeaveRequest] Is ${currentDate.toDateString()} a holiday? ${isHoliday}`)
 
-                if (!isHoliday) {
+                if (isHoliday) {
+                    skippedHolidays.push(currentDate.toISOString().split('T')[0])
+                    console.log(`[LeaveRequest] Skipping holiday: ${currentDate.toDateString()}`)
+                } else {
                     breakdown[year] = (breakdown[year] || 0) + 1
                     total++
+                    console.log(`[LeaveRequest] Counted working day: ${currentDate.toDateString()}, total: ${total}`)
                 }
+            } else {
+                console.log(`[LeaveRequest] Skipping weekend: ${currentDate.toDateString()}`)
             }
 
             currentDate.setDate(currentDate.getDate() + 1)
         }
 
-        return { total, breakdown }
+        if (skippedHolidays.length > 0) {
+            console.log(`[LeaveRequest] Skipped ${skippedHolidays.length} holiday(s): ${skippedHolidays.join(', ')}`)
+        }
+
+        console.log(`[LeaveRequest] Final working days count: ${total}`)
+        return { total, breakdown, skippedHolidays }
     }
 
     private static countWeekends(startDate: Date, endDate: Date): number {
@@ -2884,6 +3064,198 @@ export class LeaveRequestController {
             [LeaveTypes.BEREAVEMENT]: "#9C27B0",
         }
         return colors[leaveType] || "#607D8B"
+    }
+
+    /**
+     * Get calendar events for all approved leave requests
+     * GET /api/leave-calendar?op=calendar-events
+     */
+    static async getCalendarEvents(req: Request): Promise<ResponseObject> {
+        try {
+            const { startDate, endDate, department } = req.query
+            const user = (req as any).user
+
+            // Check permissions
+            if (
+                !user?.permissions?.includes("HR") &&
+                !user?.permissions?.includes("ADMIN") &&
+                !user?.permissions?.includes("MANAGER")
+            ) {
+                return errorResponseObject(
+                    "Unauthorized. Only HR/Admin/Manager can view calendar events"
+                )
+            }
+
+            if (!startDate || !endDate) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "startDate", message: "Start date is required" },
+                    { field: "endDate", message: "End date is required" },
+                ])
+            }
+
+            const start = new Date(startDate as string)
+            const end = new Date(endDate as string)
+
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "startDate", message: "Invalid start date format" },
+                    { field: "endDate", message: "Invalid end date format" },
+                ])
+            }
+
+            // Build query for leave requests (all filterable statuses)
+            const query: any = {
+                status: { $in: [LeaveStatus.APPROVED, LeaveStatus.PENDING, LeaveStatus.ENDORSED, LeaveStatus.REJECTED] },
+                $or: [
+                    { startDate: { $lte: end, $gte: start } },
+                    { endDate: { $gte: start, $lte: end } },
+                    { startDate: { $lte: start }, endDate: { $gte: end } },
+                ],
+            }
+
+            // Filter by department if specified (and user is not HR/Admin)
+            if (department && !user?.permissions?.includes("HR") && !user?.permissions?.includes("ADMIN")) {
+                // Get staff in the specified department
+                const staffInDept = await Staff.find({ department }).select("_id")
+                const staffIds = staffInDept.map(s => s._id)
+                query.staff = { $in: staffIds }
+            }
+
+            // Get leave requests
+            const leaveRequests = await LeaveRequest.find(query)
+                .populate("staff", "name staffId department")
+                .populate("approval.byStaff", "name")
+                .sort({ startDate: 1 })
+
+            // Transform to calendar events
+            const events = []
+            for (const request of leaveRequests) {
+                const requestStart = new Date(request.startDate)
+                const requestEnd = new Date(request.endDate)
+                
+                // Create events for each day in the leave period
+                const currentDate = new Date(requestStart)
+                while (currentDate <= requestEnd) {
+                    // Skip weekends if not sick leave
+                    const dayOfWeek = currentDate.getDay()
+                    if (dayOfWeek !== 0 && dayOfWeek !== 6 || request.leaveType === LeaveTypes.SICK) {
+                        events.push({
+                            id: request._id,
+                            title: `${request.leaveType} - ${(request.staff as any).name}`,
+                            start: new Date(currentDate),
+                            end: new Date(currentDate),
+                            allDay: true,
+                            backgroundColor: this.getLeaveTypeColor(request.leaveType),
+                            extendedProps: {
+                                staffId: (request.staff as any).staffId,
+                                staffName: (request.staff as any).name,
+                                department: (request.staff as any).department,
+                                leaveType: request.leaveType,
+                                status: request.status,
+                                approver: (request.approval?.byStaff as any)?.name,
+                                reason: request.reason,
+                                requestId: request._id,
+                            },
+                        })
+                    }
+                    currentDate.setDate(currentDate.getDate() + 1)
+                }
+            }
+
+            return successResponseObject("Calendar events retrieved successfully", {
+                events,
+                totalEvents: events.length,
+                dateRange: { startDate: start, endDate: end },
+            })
+        } catch (error) {
+            console.error("Error fetching calendar events:", error)
+            return errorResponseObject("Failed to fetch calendar events")
+        }
+    }
+
+    /**
+     * Get calendar events for current user's leave requests
+     * GET /api/leave-calendar?op=my-calendar
+     */
+    static async getMyCalendarEvents(req: Request): Promise<ResponseObject> {
+        try {
+            const { startDate, endDate } = req.query
+            const user = (req as any).user
+
+            if (!startDate || !endDate) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "startDate", message: "Start date is required" },
+                    { field: "endDate", message: "End date is required" },
+                ])
+            }
+
+            const start = new Date(startDate as string)
+            const end = new Date(endDate as string)
+
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+                return validationErrorResponseObject("Validation failed", [
+                    { field: "startDate", message: "Invalid start date format" },
+                    { field: "endDate", message: "Invalid end date format" },
+                ])
+            }
+
+            // Get user's leave requests
+            const query: any = {
+                staff: user._id,
+                $or: [
+                    { startDate: { $lte: end, $gte: start } },
+                    { endDate: { $gte: start, $lte: end } },
+                    { startDate: { $lte: start }, endDate: { $gte: end } },
+                ],
+            }
+
+            const leaveRequests = await LeaveRequest.find(query)
+                .populate("approval.byStaff", "name")
+                .sort({ startDate: 1 })
+
+            // Transform to calendar events
+            const events = []
+            for (const request of leaveRequests) {
+                const requestStart = new Date(request.startDate)
+                const requestEnd = new Date(request.endDate)
+                
+                // Create events for each day in the leave period
+                const currentDate = new Date(requestStart)
+                while (currentDate <= requestEnd) {
+                    // Skip weekends if not sick leave
+                    const dayOfWeek = currentDate.getDay()
+                    if (dayOfWeek !== 0 && dayOfWeek !== 6 || request.leaveType === LeaveTypes.SICK) {
+                        events.push({
+                            id: request._id,
+                            title: `${request.leaveType} Leave`,
+                            start: new Date(currentDate),
+                            end: new Date(currentDate),
+                            allDay: true,
+                            backgroundColor: this.getLeaveTypeColor(request.leaveType),
+                            borderColor: request.status === LeaveStatus.APPROVED ? 
+                                this.getLeaveTypeColor(request.leaveType) : "#9CA3AF",
+                            extendedProps: {
+                                leaveType: request.leaveType,
+                                status: request.status,
+                                approver: (request.approval?.byStaff as any)?.name,
+                                reason: request.reason,
+                                requestId: request._id,
+                            },
+                        })
+                    }
+                    currentDate.setDate(currentDate.getDate() + 1)
+                }
+            }
+
+            return successResponseObject("My calendar events retrieved successfully", {
+                events,
+                totalEvents: events.length,
+                dateRange: { startDate: start, endDate: end },
+            })
+        } catch (error) {
+            console.error("Error fetching my calendar events:", error)
+            return errorResponseObject("Failed to fetch calendar events")
+        }
     }
 }
 

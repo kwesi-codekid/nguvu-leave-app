@@ -190,7 +190,7 @@ export class JobPositionController {
         id: string
     ): Promise<ResponseObject> {
         try {
-            const { title, maxOccupancy } = req.body
+            const { title, maxOccupancy, endorserPosition, approverPosition } = req.body
             const user = (req as any).user
 
             // Check HR/Admin permission
@@ -210,10 +210,10 @@ export class JobPositionController {
             }
 
             // Find existing position
-            const position = await JobPosition.findById(id).populate(
-                "department",
-                "name"
-            )
+            const position = await JobPosition.findById(id)
+                .populate("department", "name")
+                .populate("endorserPosition", "title")
+                .populate("approverPosition", "title")
 
             if (!position) {
                 return errorResponseObject("Job position not found")
@@ -285,6 +285,88 @@ export class JobPositionController {
                             fieldLabel: "Maximum Occupancy",
                         })
                         updates.maxOccupancy = maxOccupancy
+                    }
+                }
+            }
+
+            // Endorser position validation and tracking
+            if (endorserPosition !== undefined) {
+                const currentEndorserId = (position.endorserPosition as any)?._id?.toString() ||
+                    (position.endorserPosition as any)?.toString() || null
+                const newEndorserId = endorserPosition || null
+
+                if (currentEndorserId !== newEndorserId) {
+                    // Validate endorser position exists if provided
+                    if (newEndorserId) {
+                        const endorserExists = await JobPosition.findById(newEndorserId)
+                        if (!endorserExists) {
+                            errors.push({
+                                field: "endorserPosition",
+                                message: "Endorser position not found",
+                            })
+                        } else if (newEndorserId === id) {
+                            errors.push({
+                                field: "endorserPosition",
+                                message: "Position cannot endorse itself",
+                            })
+                        } else {
+                            changes.push({
+                                field: "endorserPosition",
+                                oldValue: currentEndorserId,
+                                newValue: newEndorserId,
+                                fieldLabel: "Endorser Position",
+                            })
+                            updates.endorserPosition = newEndorserId
+                        }
+                    } else {
+                        changes.push({
+                            field: "endorserPosition",
+                            oldValue: currentEndorserId,
+                            newValue: null,
+                            fieldLabel: "Endorser Position",
+                        })
+                        updates.endorserPosition = null
+                    }
+                }
+            }
+
+            // Approver position validation and tracking
+            if (approverPosition !== undefined) {
+                const currentApproverId = (position.approverPosition as any)?._id?.toString() ||
+                    (position.approverPosition as any)?.toString() || null
+                const newApproverId = approverPosition || null
+
+                if (currentApproverId !== newApproverId) {
+                    // Validate approver position exists if provided
+                    if (newApproverId) {
+                        const approverExists = await JobPosition.findById(newApproverId)
+                        if (!approverExists) {
+                            errors.push({
+                                field: "approverPosition",
+                                message: "Approver position not found",
+                            })
+                        } else if (newApproverId === id) {
+                            errors.push({
+                                field: "approverPosition",
+                                message: "Position cannot approve itself",
+                            })
+                        } else {
+                            changes.push({
+                                field: "approverPosition",
+                                oldValue: currentApproverId,
+                                newValue: newApproverId,
+                                fieldLabel: "Approver Position",
+                            })
+                            updates.approverPosition = newApproverId
+                        }
+                    } else {
+                        changes.push({
+                            field: "approverPosition",
+                            oldValue: currentApproverId,
+                            newValue: null,
+                            fieldLabel: "Approver Position",
+                        })
+                        updates.approverPosition = null
                     }
                 }
             }

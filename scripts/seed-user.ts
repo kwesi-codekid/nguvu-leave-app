@@ -37,55 +37,87 @@ async function seedUser() {
         // Hash the password
         const passwordHash = await bcrypt.hash("password", 10);
 
-        // Check if user already exists
         const staffCollection = db.collection("staff");
-        const existingUser = await staffCollection.findOne({
-            $or: [
-                { email: "gyankwadwomends2001@gmail.com" },
-                { phone: "0593125184" }
-            ]
-        });
 
-        if (existingUser) {
-            console.log("User already exists with this email or phone");
-            await mongoose.disconnect();
-            return;
+        // Users to create
+        const users = [
+            {
+                name: "Team Lead",
+                phone: "0501234567",
+                email: "teamlead@company.com",
+                staffId: "TL001",
+                permissions: ["MANAGER", "STAFF"],
+                gender: "male",
+            },
+            {
+                name: "HR Manager",
+                phone: "0502234567",
+                email: "hr@company.com",
+                staffId: "HR001",
+                permissions: ["HR", "STAFF"],
+                gender: "female",
+            },
+            {
+                name: "John Staff",
+                phone: "0503234567",
+                email: "staff@company.com",
+                staffId: "STF001",
+                permissions: ["STAFF"],
+                gender: "male",
+            },
+        ];
+
+        for (const user of users) {
+            // Check if user already exists
+            const existingUser = await staffCollection.findOne({
+                $or: [
+                    { email: user.email },
+                    { phone: user.phone },
+                    { staffId: user.staffId }
+                ]
+            });
+
+            if (existingUser) {
+                console.log(`User ${user.name} already exists, skipping...`);
+                continue;
+            }
+
+            // Create the user
+            const result = await staffCollection.insertOne({
+                name: user.name,
+                phone: user.phone,
+                email: user.email,
+                staffId: user.staffId,
+                department: department._id,
+                permissions: user.permissions,
+                gender: user.gender,
+                profileImage: null,
+                address: {
+                    city: "Accra",
+                    country: "Ghana"
+                },
+                emergencyContact: {
+                    name: "Emergency Contact",
+                    phone: "+233201234567"
+                },
+                status: "active",
+                isOnLeave: false,
+                currentContract: null,
+                createdBy: null,
+                passwordHash: passwordHash,
+                passwordLastChangedAt: new Date(),
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                __v: 0
+            });
+
+            console.log(`\nUser created: ${user.name}`);
+            console.log(`  Staff ID: ${user.staffId}`);
+            console.log(`  Email: ${user.email}`);
+            console.log(`  Phone: ${user.phone}`);
+            console.log(`  Permissions: ${user.permissions.join(", ")}`);
+            console.log(`  Password: password`);
         }
-
-        // Create the user
-        const result = await staffCollection.insertOne({
-            name: "System Administrator",
-            phone: "0593125184",
-            email: "gyankwadwomends2001@gmail.com",
-            staffId: "ADM002",
-            department: department._id,
-            permissions: ["ADMIN", "HR", "MANAGER", "STAFF"],
-            gender: "male",
-            profileImage: null,
-            address: {
-                city: "Accra",
-                country: "Ghana"
-            },
-            emergencyContact: {
-                name: "Emergency Contact",
-                phone: "+233201234567"
-            },
-            status: "active",
-            isOnLeave: false,
-            currentContract: null,
-            createdBy: null,
-            passwordHash: passwordHash,
-            passwordLastChangedAt: new Date(),
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            __v: 0
-        });
-
-        console.log("User created successfully!");
-        console.log("User ID:", result.insertedId);
-        console.log("Email: gyankwadwomends2001@gmail.com");
-        console.log("Phone: 0593125184");
-        console.log("Password: password");
 
         await mongoose.disconnect();
         console.log("Disconnected from MongoDB");

@@ -1,30 +1,32 @@
 import mongoose, { Schema, Document, Model } from "mongoose"
 import { LeaveBalanceInterface, LeaveTypes, LEAVE_CAPS } from "../utils/types"
+import { getContractPeriod, getMonthsInPeriod, getTotalMonthsInPeriod, formatPeriod } from "../utils/contract-period"
 
 // Extend the interface for Mongoose document
 export interface ILeaveBalance extends LeaveBalanceInterface, Document {
     _id: string
     remaining: number // Virtual field
     availableForRequest: number // Virtual field for annual leave
+    periodLabel: string // Virtual field - formatted period
 
     canRequest(days: number): boolean
     debit(days: number, reason?: string): Promise<ILeaveBalance>
     credit(days: number, reason?: string): Promise<ILeaveBalance>
     updateAccrual(asOfDate?: Date): Promise<ILeaveBalance>
-    resetForNewYear(): Promise<ILeaveBalance>
+    resetForNewPeriod(): Promise<ILeaveBalance>
 }
 
 // Interface for static methods
 interface ILeaveBalanceModel extends Model<ILeaveBalance> {
-    getOrCreate(staffId: string, year: number, leaveType: LeaveTypes): Promise<ILeaveBalance>
-    initializeForStaff(staffId: string, year: number): Promise<ILeaveBalance[]>
-    processMonthlyAccruals(year?: number, month?: number): Promise<number>
-    getStaffBalances(staffId: string, year: number): Promise<ILeaveBalance[]>
-    resetAllForNewYear(year: number): Promise<number>
+    getOrCreate(staffId: string, periodStart: Date, periodEnd: Date, leaveType: LeaveTypes): Promise<ILeaveBalance>
+    initializeForStaff(staffId: string, periodStart: Date, periodEnd: Date): Promise<ILeaveBalance[]>
+    processMonthlyAccruals(): Promise<number>
+    getStaffBalances(staffId: string, periodStart: Date): Promise<ILeaveBalance[]>
+    createNewPeriodBalances(): Promise<number>
 }
 
 // Define the LeaveBalance schema
-const LeaveBalanceSchema = new Schema<ILeaveBalance>(
+const LeaveBalanceSchema = new Schema<any>(
     {
         staff: {
             type: Schema.Types.ObjectId,
@@ -34,14 +36,18 @@ const LeaveBalanceSchema = new Schema<ILeaveBalance>(
         },
         year: {
             type: Number,
+            index: true,
+            // Auto-derived from periodStart in pre-save hook
+        },
+        periodStart: {
+            type: Date,
             required: true,
             index: true,
-            validate: {
-                validator: function (value: number) {
-                    return value >= 2000 && value <= 2100
-                },
-                message: "Year must be between 2000 and 2100",
-            },
+        },
+        periodEnd: {
+            type: Date,
+            required: true,
+            index: true,
         },
         leaveType: {
             type: String,
@@ -58,7 +64,7 @@ const LeaveBalanceSchema = new Schema<ILeaveBalance>(
             type: Number,
             default: 0,
             min: 0,
-            // Only used for annual leave
+            // Monthly accrual for annual leave; equals allocated for other types
         },
         used: {
             type: Number,
@@ -68,15 +74,15 @@ const LeaveBalanceSchema = new Schema<ILeaveBalance>(
         adjustments: {
             type: Number,
             default: 0,
-            // Only for annual leave - can be positive or negative
+            // Can be positive or negative
         },
         lastAccrualAt: {
             type: Date,
-            // Only for annual leave - tracks last monthly accrual
+            // Tracks last monthly accrual
         },
         notes: {
             type: String,
-            maxlength: 500,
+            maxlength: 2000,
         },
         createdBy: {
             type: Schema.Types.ObjectId,
@@ -90,37 +96,44 @@ const LeaveBalanceSchema = new Schema<ILeaveBalance>(
     }
 )
 
-// Create unique compound index
-LeaveBalanceSchema.index({ staff: 1, year: 1, leaveType: 1 }, { unique: true })
-LeaveBalanceSchema.index({ year: 1, leaveType: 1 })
+// Create unique compound index on period-based fields
+LeaveBalanceSchema.index({ staff: 1, periodStart: 1, leaveType: 1 }, { unique: true })
+// Keep a non-unique index on year for backward compatibility queries
+LeaveBalanceSchema.index({ staff: 1, year: 1, leaveType: 1 })
+LeaveBalanceSchema.index({ periodStart: 1, periodEnd: 1, leaveType: 1 })
+
+// Pre-save hook: auto-derive year from periodStart
+LeaveBalanceSchema.pre("save", function () {
+    if (this.periodStart) {
+        this.year = new Date(this.periodStart).getFullYear()
+    }
+})
 
 // Virtual for remaining balance
 LeaveBalanceSchema.virtual("remaining").get(function () {
-    if (this.leaveType === LeaveTypes.ANNUAL) {
-        // For annual: remaining = accrued + adjustments - used
-        return Math.max(0, (this.accrued || 0) + (this.adjustments || 0) - this.used)
-    }
-    // For others: remaining = allocated - used
+    // Annual leave: remaining = accrued + adjustments - used (can be negative if borrowed)
+    // Other types: remaining = allocated + adjustments - used (full allocation available immediately)
+    const base = this.leaveType === LeaveTypes.ANNUAL ? (this.accrued || 0) : this.allocated
+    return base + (this.adjustments || 0) - this.used
+})
+
+// Virtual for available for request (max requestable for all types)
+LeaveBalanceSchema.virtual("availableForRequest").get(function () {
+    // Can request up to allocated days total, even if not yet fully accrued
     return Math.max(0, this.allocated - this.used)
 })
 
-// Virtual for available for request (annual leave only)
-LeaveBalanceSchema.virtual("availableForRequest").get(function () {
-    if (this.leaveType === LeaveTypes.ANNUAL) {
-        // Can request up to 30 days total, regardless of accrued
-        return Math.max(0, 30 - this.used)
+// Virtual for formatted period label
+LeaveBalanceSchema.virtual("periodLabel").get(function () {
+    if (this.periodStart && this.periodEnd) {
+        return formatPeriod(this.periodStart, this.periodEnd)
     }
-    // For others, same as remaining
-    return this.remaining
+    return `Year ${this.year}`
 })
 
 // Instance method to check if request is allowed
 LeaveBalanceSchema.methods.canRequest = function (days: number): boolean {
-    if (this.leaveType === LeaveTypes.ANNUAL) {
-        // For annual leave, can request up to 30 days total
-        return this.used + days <= 30
-    }
-    // For other types, check against remaining balance
+    // Can request up to allocated days total (even if not yet fully accrued)
     return this.used + days <= this.allocated
 }
 
@@ -131,19 +144,25 @@ LeaveBalanceSchema.methods.debit = async function (
 ): Promise<ILeaveBalance> {
     if (!this.canRequest(days)) {
         throw new Error(
-            `Insufficient balance. Available: ${
-                this.leaveType === LeaveTypes.ANNUAL
-                    ? this.availableForRequest
-                    : this.remaining
-            } days`
+            `Insufficient balance. Available: ${this.availableForRequest} days`
         )
     }
 
     this.used += days
-    if (reason && this.notes) {
-        this.notes = `${this.notes}\n${new Date().toISOString()}: Debited ${days} days - ${reason}`
-    } else if (reason) {
-        this.notes = `${new Date().toISOString()}: Debited ${days} days - ${reason}`
+
+    const newNote = `${new Date().toISOString()}: Debited ${days} days - ${reason}`
+
+    if (this.notes) {
+        const combinedNotes = `${this.notes}\n${newNote}`
+        if (combinedNotes.length <= 2000) {
+            this.notes = combinedNotes
+        } else {
+            const maxOldLength = 2000 - newNote.length - 1
+            const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
+            this.notes = `${truncatedOld}\n${newNote}`
+        }
+    } else {
+        this.notes = newNote
     }
 
     return await this.save()
@@ -156,71 +175,97 @@ LeaveBalanceSchema.methods.credit = async function (
 ): Promise<ILeaveBalance> {
     this.used = Math.max(0, this.used - days)
 
-    if (reason && this.notes) {
-        this.notes = `${this.notes}\n${new Date().toISOString()}: Credited ${days} days - ${reason}`
-    } else if (reason) {
-        this.notes = `${new Date().toISOString()}: Credited ${days} days - ${reason}`
+    const newNote = `${new Date().toISOString()}: Credited ${days} days - ${reason}`
+
+    if (this.notes) {
+        const combinedNotes = `${this.notes}\n${newNote}`
+        if (combinedNotes.length <= 2000) {
+            this.notes = combinedNotes
+        } else {
+            const maxOldLength = 2000 - newNote.length - 1
+            const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
+            this.notes = `${truncatedOld}\n${newNote}`
+        }
+    } else {
+        this.notes = newNote
     }
 
     return await this.save()
 }
 
-// Instance method to update accrual (for annual leave)
+// Instance method to update accrual (monthly accrual only applies to annual leave)
 LeaveBalanceSchema.methods.updateAccrual = async function (
     asOfDate?: Date
 ): Promise<ILeaveBalance> {
+    // Non-annual leave types get their full cap immediately (no monthly accrual)
     if (this.leaveType !== LeaveTypes.ANNUAL) {
-        return this // Only annual leave accrues
-    }
+        const fullCap = LEAVE_CAPS[this.leaveType] || 0
+        let needsSave = false
 
-    // Get staff's active contract to determine accrual start
-    const StaffContract = mongoose.model("StaffContract")
-    const contract = await StaffContract.findOne({
-        staff: this.staff,
-        status: "active"
-    })
+        // Ensure allocated matches the full cap
+        if (this.allocated !== fullCap) {
+            this.allocated = fullCap
+            needsSave = true
+        }
 
-    if (!contract) {
-        // No active contract, no accrual
+        // Ensure accrued equals allocated
+        if ((this.accrued || 0) !== this.allocated) {
+            this.accrued = this.allocated
+            this.lastAccrualAt = new Date()
+            needsSave = true
+        }
+
+        if (needsSave) {
+            return await this.save()
+        }
         return this
     }
 
+    // Annual leave: monthly accrual logic
     const now = asOfDate || new Date()
-    const yearStart = new Date(this.year, 0, 1)
-    const yearEnd = new Date(this.year, 11, 31, 23, 59, 59)
-    const contractStart = new Date(contract.startDate)
+    const periodStart = new Date(this.periodStart)
+    const periodEnd = new Date(this.periodEnd)
 
-    // Determine the effective start date for accrual calculation
-    // Use the later of: contract start date or year start
-    const accrualStartDate = contractStart > yearStart ? contractStart : yearStart
+    // Clamp effective date to period bounds
+    const effectiveDate = now > periodEnd ? periodEnd : now < periodStart ? periodStart : now
 
-    // Ensure we're within the year
-    const effectiveDate = now > yearEnd ? yearEnd : now < yearStart ? yearStart : now
-
-    // If contract hasn't started yet or effective date is before contract start, no accrual
-    if (effectiveDate < accrualStartDate) {
+    // If we haven't reached the period yet, no accrual
+    if (now < periodStart) {
         return this
     }
 
-    // Calculate months from accrual start to effective date
-    let monthsWorked = 0
-    if (effectiveDate >= accrualStartDate) {
-        const yearDiff = effectiveDate.getFullYear() - accrualStartDate.getFullYear()
-        const monthDiff = effectiveDate.getMonth() - accrualStartDate.getMonth()
-        monthsWorked = Math.max(0, (yearDiff * 12) + monthDiff + 1) // +1 to include current month
-    }
+    // Calculate months worked within this period
+    const monthsWorked = getMonthsInPeriod(periodStart, effectiveDate)
 
-    // Calculate new accrual (2.5 days per month, max 30)
-    const newAccrual = Math.min(30, monthsWorked * 2.5)
+    // Calculate total months in this period (for pro-rating partial periods)
+    const totalPeriodMonths = getTotalMonthsInPeriod(periodStart, periodEnd)
+
+    // Monthly rate = allocated / totalPeriodMonths
+    const monthlyRate = totalPeriodMonths > 0 ? this.allocated / totalPeriodMonths : 0
+
+    // Max accrual = allocated (full period allocation)
+    const maxAccrual = this.allocated
+
+    // Calculate new accrual (monthlyRate days per month, capped at allocated)
+    const newAccrual = Math.min(maxAccrual, monthsWorked * monthlyRate)
 
     if (newAccrual > (this.accrued || 0)) {
         this.accrued = newAccrual
         this.lastAccrualAt = effectiveDate
 
+        const newNote = `${effectiveDate.toISOString()}: Accrued to ${newAccrual} days (${monthsWorked} months in period)`
+
         if (this.notes) {
-            this.notes = `${this.notes}\n${effectiveDate.toISOString()}: Accrued to ${newAccrual} days (${monthsWorked} months from contract start)`
+            const combinedNotes = `${this.notes}\n${newNote}`
+            if (combinedNotes.length <= 2000) {
+                this.notes = combinedNotes
+            } else {
+                const maxOldLength = 2000 - newNote.length - 1
+                const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
+                this.notes = `${truncatedOld}\n${newNote}`
+            }
         } else {
-            this.notes = `${effectiveDate.toISOString()}: Accrued to ${newAccrual} days (${monthsWorked} months from contract start)`
+            this.notes = newNote
         }
 
         return await this.save()
@@ -229,24 +274,23 @@ LeaveBalanceSchema.methods.updateAccrual = async function (
     return this
 }
 
-// Instance method to reset for new year
-LeaveBalanceSchema.methods.resetForNewYear = async function (): Promise<ILeaveBalance> {
-    // Reset values for the new year
-    this.allocated = LEAVE_CAPS[this.leaveType] || 0
+// Instance method to reset for new period
+LeaveBalanceSchema.methods.resetForNewPeriod = async function (): Promise<ILeaveBalance> {
+    const totalPeriodMonths = getTotalMonthsInPeriod(this.periodStart, this.periodEnd)
+
+    // Annual leave: pro-rated based on period length (accrues monthly)
+    // Other types: full cap allocation (available immediately)
+    this.allocated = this.leaveType === LeaveTypes.ANNUAL
+        ? totalPeriodMonths * 2.5
+        : (LEAVE_CAPS[this.leaveType] || 0)
     this.used = 0
     this.adjustments = 0
     this.lastAccrualAt = undefined
 
-    // For annual leave, calculate initial accrual based on contract
-    if (this.leaveType === LeaveTypes.ANNUAL) {
-        this.accrued = 0 // Will be updated by updateAccrual
-        // Update accrual based on contract start date
-        await this.updateAccrual()
-        this.notes = `${new Date().toISOString()}: Reset for year ${this.year} with pro-rated accrual`
-    } else {
-        this.accrued = 0
-        this.notes = `${new Date().toISOString()}: Reset for year ${this.year}`
-    }
+    // Calculate initial accrual based on contract period
+    this.accrued = 0 // Will be updated by updateAccrual
+    await this.updateAccrual()
+    this.notes = `${new Date().toISOString()}: Reset for period ${formatPeriod(this.periodStart, this.periodEnd)} with pro-rated accrual`
 
     return await this.save()
 }
@@ -254,16 +298,32 @@ LeaveBalanceSchema.methods.resetForNewYear = async function (): Promise<ILeaveBa
 // Static method to get or create a balance record
 LeaveBalanceSchema.statics.getOrCreate = async function (
     staffId: string,
-    year: number,
+    periodStart: Date,
+    periodEnd: Date,
     leaveType: LeaveTypes
 ): Promise<ILeaveBalance> {
-    let balance = await this.findOne({ staff: staffId, year, leaveType })
+    // Normalize periodStart to midnight for consistent querying
+    const normalizedStart = new Date(periodStart)
+    normalizedStart.setHours(0, 0, 0, 0)
+
+    let balance = await this.findOne({
+        staff: staffId,
+        periodStart: normalizedStart,
+        leaveType,
+    })
 
     if (!balance) {
-        const allocated = LEAVE_CAPS[leaveType] || 0
+        // Annual leave: pro-rated based on period length (accrues monthly)
+        // Other types: full cap allocation (available immediately)
+        const totalPeriodMonths = getTotalMonthsInPeriod(periodStart, periodEnd)
+        const allocated = leaveType === LeaveTypes.ANNUAL
+            ? totalPeriodMonths * 2.5
+            : (LEAVE_CAPS[leaveType] || 0)
+
         balance = new this({
             staff: staffId,
-            year,
+            periodStart: normalizedStart,
+            periodEnd: new Date(periodEnd),
             leaveType,
             allocated,
             accrued: 0,
@@ -274,11 +334,8 @@ LeaveBalanceSchema.statics.getOrCreate = async function (
         // Save first to create the record
         await balance.save()
 
-        // For annual leave, initialize accrual based on contract
-        // The updateAccrual method will now properly check contract start date
-        if (leaveType === LeaveTypes.ANNUAL) {
-            await balance.updateAccrual()
-        }
+        // Initialize accrual (annual: based on months worked; others: full allocation)
+        await balance.updateAccrual()
     }
 
     return balance
@@ -287,7 +344,8 @@ LeaveBalanceSchema.statics.getOrCreate = async function (
 // Static method to initialize all leave types for a staff member
 LeaveBalanceSchema.statics.initializeForStaff = async function (
     staffId: string,
-    year: number
+    periodStart: Date,
+    periodEnd: Date
 ): Promise<ILeaveBalance[]> {
     const Staff = mongoose.model("Staff")
     const staff = await Staff.findById(staffId)
@@ -303,64 +361,86 @@ LeaveBalanceSchema.statics.initializeForStaff = async function (
         if (leaveType === LeaveTypes.MATERNITY && staff.gender !== "female") continue
         if (leaveType === LeaveTypes.PATERNITY && staff.gender !== "male") continue
 
-        const balance = await this.getOrCreate(staffId, year, leaveType as LeaveTypes)
+        const balance = await this.getOrCreate(staffId, periodStart, periodEnd, leaveType as LeaveTypes)
         balances.push(balance)
     }
 
     return balances
 }
 
-// Static method to process monthly accruals
-LeaveBalanceSchema.statics.processMonthlyAccruals = async function (
-    year?: number,
-    month?: number
-): Promise<number> {
-    const currentYear = year || new Date().getFullYear()
-    const asOfDate = month
-        ? new Date(currentYear, month - 1, 28) // Use 28th to avoid month-end issues
-        : new Date()
+// Static method to process monthly accruals (only annual leave accrues monthly)
+LeaveBalanceSchema.statics.processMonthlyAccruals = async function (): Promise<number> {
+    const now = new Date()
 
-    // Find all annual leave balances for the year
+    // Only annual leave balances accrue monthly
     const balances = await this.find({
-        year: currentYear,
         leaveType: LeaveTypes.ANNUAL,
+        periodStart: { $lte: now },
+        periodEnd: { $gte: now },
     })
 
     let updated = 0
     for (const balance of balances) {
         const before = balance.accrued
-        await balance.updateAccrual(asOfDate)
+        await balance.updateAccrual(now)
         if (balance.accrued !== before) updated++
     }
 
     return updated
 }
 
-// Static method to get all balances for a staff member
+// Static method to get all balances for a staff member by period
 LeaveBalanceSchema.statics.getStaffBalances = async function (
     staffId: string,
-    year: number
+    periodStart: Date
 ): Promise<ILeaveBalance[]> {
-    return this.find({ staff: staffId, year })
+    // Normalize periodStart
+    const normalizedStart = new Date(periodStart)
+    normalizedStart.setHours(0, 0, 0, 0)
+
+    return this.find({ staff: staffId, periodStart: normalizedStart })
         .sort({ leaveType: 1 })
         .lean()
         .exec()
 }
 
-// Static method to reset all balances for a new year
-LeaveBalanceSchema.statics.resetAllForNewYear = async function (
-    year: number
-): Promise<number> {
+// Static method to create new period balances (replaces resetAllForNewYear)
+// Called daily to check for contract anniversaries
+LeaveBalanceSchema.statics.createNewPeriodBalances = async function (): Promise<number> {
     const StaffContract = mongoose.model("StaffContract")
+    const now = new Date()
 
-    // Get all active staff
+    // Get all active contracts
     const activeContracts = await StaffContract.find({ status: "active" })
-    const staffIds = [...new Set(activeContracts.map(c => c.staff.toString()))]
 
     let count = 0
-    for (const staffId of staffIds) {
-        await this.initializeForStaff(staffId, year)
-        count++
+    for (const contract of activeContracts) {
+        // Get the current period for this contract
+        const period = getContractPeriod(
+            { startDate: contract.startDate, endDate: contract.endDate },
+            now
+        )
+
+        if (!period) continue // Contract not active for current date
+
+        // Check if balances already exist for this period
+        const normalizedStart = new Date(period.periodStart)
+        normalizedStart.setHours(0, 0, 0, 0)
+
+        const existing = await this.findOne({
+            staff: contract.staff,
+            periodStart: normalizedStart,
+        })
+
+        if (!existing) {
+            // Create balances for this new period
+            await this.initializeForStaff(
+                contract.staff.toString(),
+                period.periodStart,
+                period.periodEnd
+            )
+            count++
+        }
     }
 
     return count
@@ -376,7 +456,7 @@ LeaveBalanceSchema.set("toJSON", {
 })
 
 // Create and export the model
-const LeaveBalance = (mongoose.models.LeaveBalance as mongoose.Model<ILeaveBalance, ILeaveBalanceModel>) || mongoose.model<ILeaveBalance, ILeaveBalanceModel>(
+const LeaveBalance = (mongoose.models.LeaveBalance as (mongoose.Model<ILeaveBalance> & ILeaveBalanceModel)) || mongoose.model<ILeaveBalance, ILeaveBalanceModel>(
     "LeaveBalance",
     LeaveBalanceSchema
 )

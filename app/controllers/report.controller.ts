@@ -137,12 +137,12 @@ export class ReportController {
                 total: leaveRequests.length,
                 totalWorkingDays: 0,
                 byStatus: {
-                    pending: 0,
-                    endorsed: 0,
-                    approved: 0,
-                    rejected: 0,
-                    cancelled: 0,
-                    withdrawn: 0,
+                    [LeaveStatus.PENDING]: 0,
+                    [LeaveStatus.ENDORSED]: 0,
+                    [LeaveStatus.APPROVED]: 0,
+                    [LeaveStatus.REJECTED]: 0,
+                    [LeaveStatus.CANCELLED]: 0,
+                    [LeaveStatus.WITHDRAWN]: 0,
                 } as Record<string, number>,
                 byLeaveType: {} as Record<string, any> as Record<string, any>,
                 byDepartment: {} as Record<string, any>,
@@ -463,11 +463,8 @@ export class ReportController {
                     }
                 }
 
-                // Calculate available for request (for annual leave)
-                const availableForRequest =
-                    balance.leaveType === LeaveTypes.ANNUAL
-                        ? balance.availableForRequest
-                        : balance.remaining
+                // Calculate available for request
+                const availableForRequest = balance.availableForRequest
 
                 // Add to per staff per type
                 const record = {
@@ -528,9 +525,7 @@ export class ReportController {
                 stats.totals.totalAllocated += balance.allocated
                 stats.totals.totalUsed += balance.used
                 stats.totals.totalRemaining += balance.remaining
-                if (balance.leaveType === LeaveTypes.ANNUAL) {
-                    stats.totals.totalAvailableForRequest += availableForRequest
-                }
+                stats.totals.totalAvailableForRequest += availableForRequest
             }
 
             // Calculate averages and utilization
@@ -1303,12 +1298,12 @@ export class ReportController {
                     requests: {
                         total: leaveRequests.length,
                         byStatus: {
-                            pending: 0,
-                            endorsed: 0,
-                            approved: 0,
-                            rejected: 0,
-                            cancelled: 0,
-                            withdrawn: 0,
+                            [LeaveStatus.PENDING]: 0,
+                            [LeaveStatus.ENDORSED]: 0,
+                            [LeaveStatus.APPROVED]: 0,
+                            [LeaveStatus.REJECTED]: 0,
+                            [LeaveStatus.CANCELLED]: 0,
+                            [LeaveStatus.WITHDRAWN]: 0,
                         },
                         byType: {} as Record<string, any>,
                     },
@@ -1398,14 +1393,14 @@ export class ReportController {
 
                 // Approval metrics
                 const totalDecided =
-                    stats.requests.byStatus.approved +
-                    stats.requests.byStatus.rejected
+                    (stats.requests.byStatus as any)[LeaveStatus.APPROVED] +
+                    (stats.requests.byStatus as any)[LeaveStatus.REJECTED]
                 if (totalDecided > 0) {
                     stats.approvalMetrics.approvalRate = Math.round(
-                        (stats.requests.byStatus.approved / totalDecided) * 100
+                        ((stats.requests.byStatus as any)[LeaveStatus.APPROVED] / totalDecided) * 100
                     )
                     stats.approvalMetrics.rejectionRate = Math.round(
-                        (stats.requests.byStatus.rejected / totalDecided) * 100
+                        ((stats.requests.byStatus as any)[LeaveStatus.REJECTED] / totalDecided) * 100
                     )
                 }
 

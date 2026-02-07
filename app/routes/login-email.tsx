@@ -65,15 +65,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             password,
         })
 
-        const sessionData: AuthSessionInterface = {
+        const sessionData = {
             user: {
-                id: response.data?.data?.staff._id,
+                _id: response.data?.data?.staff._id,
+                id: response.data?.data?.staff.staffId,
                 email: response.data?.data?.staff.email,
                 phone: response.data?.data?.staff.phone,
                 name: response.data?.data?.staff.name,
                 department: response.data?.data?.staff.department?.name,
                 permissions: response.data?.data?.staff.permissions,
                 profilePicture: response.data?.data?.staff.profileImage?.url,
+                gender: response.data?.data?.staff.gender,
             },
             token: response.data?.data?.token,
             refreshToken: response.data?.data?.refreshToken,

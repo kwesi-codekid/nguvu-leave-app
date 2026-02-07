@@ -64,6 +64,46 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
         // Route based on operation
         switch (op) {
+            case "all": {
+                // Get all contracts regardless of status - HR/Admin/Manager only
+                if (
+                    !user.permissions?.includes("HR") &&
+                    !user.permissions?.includes("ADMIN") &&
+                    !user.permissions?.includes("MANAGER")
+                ) {
+                    return errorResponse(
+                        "Unauthorized. Only HR/Admin/Manager can view all contracts",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await StaffContractController.getAllContracts(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
+            case "pending": {
+                // Get pending contracts - HR/Admin/Manager only
+                if (
+                    !user.permissions?.includes("HR") &&
+                    !user.permissions?.includes("ADMIN") &&
+                    !user.permissions?.includes("MANAGER")
+                ) {
+                    return errorResponse(
+                        "Unauthorized. Only HR/Admin/Manager can view pending contracts",
+                        null,
+                        403
+                    )
+                }
+
+                const result = await StaffContractController.getPendingContracts(req)
+                return result.status === "success"
+                    ? successResponse(result.message, result.data)
+                    : errorResponse(result.message, null, 500)
+            }
+
             case "active": {
                 // Get all active contracts - HR/Admin only
                 if (!user.permissions?.includes("HR") && !user.permissions?.includes("ADMIN")) {
@@ -173,7 +213,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
             default: {
                 return errorResponse(
-                    "Invalid operation. Use op=active, op=expiring, op=by-staff, or op=history",
+                    "Invalid operation. Use op=all, op=pending, op=active, op=expiring, op=by-staff, or op=history",
                     null,
                     400
                 )
