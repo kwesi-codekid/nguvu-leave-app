@@ -22,10 +22,11 @@ export default function Login() {
         >
             <div className="w-full">
                 <Tabs
+                    fullWidth
                     color="warning"
                     variant="light"
                     classNames={{
-                        tabList: "gap-6 w-full relative rounded-xl p-1 bg-default-100 dark:bg-default-50",
+                        tabList: "gap-6 w-full relative rounded-xl p-1 bg-default-100 dark:bg-default-50 flex justify-between",
                         cursor: "w-full bg-white dark:bg-neutral-800 shadow-lg rounded-lg",
                         tab: "max-w-fit px-4 h-9 rounded-lg",
                         tabContent: "group-data-[selected=true]:text-warning font-semibold",
