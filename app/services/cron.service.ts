@@ -4,6 +4,7 @@ import Staff from "../models/staff.model"
 import StaffContract from "../models/staff-contract.model"
 import LeaveBalance from "../models/leave-balance.model"
 import { AccountStatus, ContractStatus } from "../utils/types"
+import { EmailQueueService } from "./email-queue.service"
 
 /**
  * CronService handles all scheduled jobs for the leave management system
@@ -16,6 +17,7 @@ export class CronService {
         console.log("Initializing cron jobs...")
         this.scheduleLeaveAccumulation()
         this.scheduleContractAnniversaryCheck()
+        this.scheduleEmailQueueProcessing()
     }
 
     /**
@@ -125,5 +127,28 @@ export class CronService {
         console.log(
             "Contract anniversary check job scheduled to run daily at midnight"
         )
+    }
+
+    /**
+     * Schedule job to process email queue every minute
+     * This ensures emails are sent promptly
+     */
+    private static scheduleEmailQueueProcessing(): void {
+        // Schedule job to run every minute
+        cron.schedule("* * * * *", async () => {
+            try {
+                const result = await EmailQueueService.processEmailQueue()
+                
+                if (result.sent > 0 || result.failed > 0) {
+                    console.log(
+                        `[Cron] Email queue processed. Sent: ${result.sent}, Failed: ${result.failed}, Pending: ${result.pending}`
+                    )
+                }
+            } catch (error) {
+                console.error("[Cron] Error in email queue processing job:", error)
+            }
+        })
+
+        console.log("Email queue processing job scheduled to run every minute")
     }
 }

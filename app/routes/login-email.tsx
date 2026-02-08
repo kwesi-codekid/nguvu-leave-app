@@ -46,13 +46,12 @@ export default function Login() {
                             className='flex flex-col gap-5 mt-6'
                         >
                             <TextInput name='email' label='Email' type="email" />
-                            <PasswordInput name='password' label='Password' />
                             <Button
                                 type='submit'
                                 color='warning'
                                 isLoading={navigation.state === "submitting"}
                             >
-                                Login
+                                Send OTP
                             </Button>
                         </Form>
                     </Tab>
@@ -91,7 +90,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const flashSession = await getFlashSession(request.headers.get("Cookie"))
     const formData = await request.formData()
     const email = formData.get("email")
-    const password = formData.get("password")
     const phone = formData.get("phone")
 
     // Handle phone login (send OTP)
@@ -138,56 +136,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
     }
 
-    // Handle email login
-    try {
-        const response = await axios.post(`${baseUrl}/auth?op=login`, {
-            email,
-            password,
-        })
+    // Handle email login (send OTP)
+    if (email && !phone) {
+        try {
+            const response = await axios.post(`${baseUrl}/auth?op=send-otp`, {
+                email,
+            })
 
-        const sessionData = {
-            user: {
-                _id: response.data?.data?.staff._id,
-                id: response.data?.data?.staff.staffId,
-                email: response.data?.data?.staff.email,
-                phone: response.data?.data?.staff.phone,
-                name: response.data?.data?.staff.name,
-                department: response.data?.data?.staff.department?.name,
-                permissions: response.data?.data?.staff.permissions,
-                profilePicture: response.data?.data?.staff.profileImage?.url,
-                gender: response.data?.data?.staff.gender,
-            },
-            token: response.data?.data?.token,
-            refreshToken: response.data?.data?.refreshToken,
-        }
+            flashSession.flash("alert", {
+                status: "success",
+                message: `Kindly note that the OTP will expire in ${
+                    response.data.data.expiresIn / 60
+                } minutes`,
+                title: "OTP sent successfully",
+            })
 
-        const session = await setSessionData(request, sessionData)
-
-        return redirect(`/dashboard`, {
-            headers: {
-                "Set-Cookie": await commitSession(session),
-            },
-        })
-    } catch (error: any) {
-        console.error(error.response?.data)
-
-        flashSession.flash("alert", {
-            status: "error",
-            message:
-                error.response?.data?.errors?.[0]?.message ||
-                error.response?.data.message ||
-                error.message ||
-                "An unknown error occurred",
-            title: error.response?.data.message,
-        })
-
-        return Response.json(
-            { error: error.response?.data },
-            {
+            return redirect(`/verify-otp?email=${email}`, {
                 headers: {
                     "Set-Cookie": await commitFlashSession(flashSession),
                 },
-            }
-        )
+            })
+        } catch (error: any) {
+            console.error(error.response?.data)
+
+            flashSession.flash("alert", {
+                status: "error",
+                message:
+                    error.response?.data?.errors?.[0]?.message ||
+                    error.response?.data.message ||
+                    error.message ||
+                    "An unknown error occurred",
+                title: error.response?.data.message,
+            })
+
+            return Response.json(
+                { error: error.response?.data },
+                {
+                    headers: {
+                        "Set-Cookie": await commitFlashSession(flashSession),
+                    },
+                }
+            )
+        }
     }
 }
