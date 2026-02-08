@@ -14,6 +14,8 @@ import type { Route } from "./+types/root";
 import "./app.css";
 import { Providers } from "./ui/lib/providers";
 import { getFlashSession } from "./flash-session";
+import { PWAInstallPrompt } from "./components/pwa-install-prompt";
+import { registerServiceWorker } from "./utils/service-worker-registration";
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -26,7 +28,29 @@ export const links: Route.LinksFunction = () => [
     rel: "stylesheet",
     href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
   },
+  { rel: "manifest", href: "/manifest.webmanifest" },
+  { rel: "apple-touch-icon", href: "/pwa-192x192.png" },
 ];
+
+export const meta: Route.MetaFunction = () => {
+  return [
+    { title: "Nguvu Leave Management System" },
+    { name: "description", content: "Comprehensive leave management system for tracking employee leave requests, balances, and approvals" },
+    { name: "keywords", content: "leave management, employee leave, HR, time off, vacation tracking" },
+    { name: "theme-color", content: "#2563eb" },
+    { name: "apple-mobile-web-app-capable", content: "yes" },
+    { name: "apple-mobile-web-app-status-bar-style", content: "default" },
+    { name: "apple-mobile-web-app-title", content: "Nguvu Leave" },
+    { name: "application-name", content: "Nguvu Leave" },
+    { name: "msapplication-TileColor", content: "#2563eb" },
+    { property: "og:title", content: "Nguvu Leave Management System" },
+    { property: "og:description", content: "Comprehensive leave management system for tracking employee leave requests, balances, and approvals" },
+    { property: "og:type", content: "website" },
+    { name: "twitter:card", content: "summary" },
+    { name: "twitter:title", content: "Nguvu Leave Management System" },
+    { name: "twitter:description", content: "Comprehensive leave management system for tracking employee leave requests, balances, and approvals" },
+  ];
+};
 
 export async function loader({ request }: Route.LoaderArgs) {
   const session = await getFlashSession(request.headers.get("Cookie"));
@@ -47,6 +71,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
           flash.title || (flash.status === "error" ? "Error Occurred!" : "Successful"),
       });
     }
+    
+    // Register service worker for PWA functionality
+    registerServiceWorker();
   }, [flash]);
 
   return (
@@ -63,6 +90,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <body>
         <Providers>
           {children}
+          <PWAInstallPrompt />
           <ScrollRestoration />
           <Scripts />
         </Providers>

@@ -815,9 +815,21 @@ export default function Reports() {
                                     {Object.keys(utilizationReport.data.utilization.departmentComparisons || {}).length > 0 && (
                                         <Card className="bg-content1 border border-zinc-200 dark:border-zinc-800">
                                             <CardHeader className="pb-0">
-                                                <div className="flex items-center gap-2">
-                                                    <Building2 className="size-5 text-primary" />
-                                                    <h3 className="font-semibold">Department Comparison</h3>
+                                                <div className="flex items-center justify-between w-full">
+                                                    <div className="flex items-center gap-2">
+                                                        <Building2 className="size-5 text-primary" />
+                                                        <h3 className="font-semibold">Department Comparison</h3>
+                                                    </div>
+                                                    <Button
+                                                        size="sm"
+                                                        color="warning"
+                                                        variant="flat"
+                                                        startContent={<Download className="size-4" />}
+                                                        onPress={() => handleExport("utilization")}
+                                                        isLoading={isExporting}
+                                                    >
+                                                        Export
+                                                    </Button>
                                                 </div>
                                             </CardHeader>
                                             <CardBody>
@@ -950,7 +962,19 @@ export default function Reports() {
                                     </div>
                                 )}
 
-                                {/* Department Cards Grid */}
+                                {/* Export & Department Cards Grid */}
+                                <div className="flex justify-end">
+                                    <Button
+                                        size="sm"
+                                        color="warning"
+                                        variant="flat"
+                                        startContent={<Download className="size-4" />}
+                                        onPress={() => handleExport("department-summary")}
+                                        isLoading={isExporting}
+                                    >
+                                        Export
+                                    </Button>
+                                </div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                     {deptSummaryReport.data.departments.map((dept: any) => (
                                         <Card key={dept.department.id} className="bg-content1 border border-zinc-200 dark:border-zinc-800 hover:scale-[1.01] transition-all">
