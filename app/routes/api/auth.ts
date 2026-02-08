@@ -643,7 +643,7 @@ async function handlePostOperations(
                     smsText: `Your leave management login code is: ${otp}. Valid for 5 minutes.`,
                 })
             } else {
-                // Send OTP via email
+                // Send OTP via email immediately (not queued)
                 const emailHtml = `
                     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                         <h2 style="color: #333; text-align: center;">Leave Management Login Code</h2>
@@ -662,12 +662,12 @@ async function handlePostOperations(
                     </div>
                 `;
                 
-                await EmailService.sendEmailImmediate(
-                    email,
-                    "Your Leave Management Login Code",
-                    emailHtml,
-                    `Your leave management login code is: ${otp}. Valid for 5 minutes.`
-                );
+                await EmailService.directSendMail({
+                    to: email,
+                    subject: "Your Leave Management Login Code",
+                    html: emailHtml,
+                    text: `Your leave management login code is: ${otp}. Valid for 5 minutes.`
+                });
             }
 
             return successResponse("OTP sent successfully", {
@@ -800,7 +800,7 @@ async function handlePostOperations(
                     smsText: `Your leave management login code is: ${otp}. Valid for 5 minutes.`,
                 })
             } else {
-                // Send OTP via email
+                // Send OTP via email immediately (not queued)
                 const emailHtml = `
                     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                         <h2 style="color: #333; text-align: center;">Leave Management Login Code</h2>
@@ -819,12 +819,12 @@ async function handlePostOperations(
                     </div>
                 `;
                 
-                await EmailService.sendEmailImmediate(
-                    email,
-                    "Your Leave Management Login Code",
-                    emailHtml,
-                    `Your leave management login code is: ${otp}. Valid for 5 minutes.`
-                );
+                await EmailService.directSendMail({
+                    to: email,
+                    subject: "Your Leave Management Login Code",
+                    html: emailHtml,
+                    text: `Your leave management login code is: ${otp}. Valid for 5 minutes.`
+                });
             }
 
             return successResponse("OTP resent successfully", {
