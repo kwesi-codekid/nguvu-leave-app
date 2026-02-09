@@ -75,7 +75,7 @@ export default defineConfig({
             }
           },
           {
-            urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp|ico)$/,
+            urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp|ico)$/i,
             handler: 'CacheFirst',
             options: {
               cacheName: 'images-cache',
@@ -111,4 +111,15 @@ export default defineConfig({
       }
     })
   ],
+  server: {
+    fs: {
+      // Allow serving files from the uploads directory
+      allow: ['..', 'uploads']
+    }
+  },
+  publicDir: 'public',
+  build: {
+    // Ensure uploads directory is copied to build
+    copyPublicDir: true
+  }
 });

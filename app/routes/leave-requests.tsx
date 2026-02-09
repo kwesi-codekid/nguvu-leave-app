@@ -62,6 +62,8 @@ import {
     Briefcase,
     Calendar,
     AlertCircle,
+    Paperclip,
+    Download,
 } from "lucide-react"
 import { MobileList } from "~/ui/components/lists"
 import { LeaveStatusChip, LeaveTypeChip } from "~/ui/components/chips"
@@ -305,6 +307,12 @@ export default function LeaveRequests() {
         }
 
         // Check if documents are required for this leave type
+        console.log("Checking document requirements:", {
+            leaveType: formData.leaveType,
+            requiresDocument: LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(formData.leaveType as any),
+            attachmentsLength: attachments.length,
+            attachments: attachments.map(a => a.name)
+        })
         if (LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(formData.leaveType as any) && attachments.length === 0) {
             addToast({
                 color: "danger",
@@ -328,22 +336,41 @@ export default function LeaveRequests() {
             // Upload files first if any
             let uploadedAttachments: any[] = []
             if (attachments.length > 0) {
+                console.log("Starting file upload:", {
+                    attachmentsCount: attachments.length,
+                    attachmentNames: attachments.map(a => a.name),
+                    attachmentSizes: attachments.map(a => a.size)
+                })
+                
                 const formData = new FormData()
                 attachments.forEach((file, index) => {
                     formData.append(`files`, file)
                 })
 
-                const uploadResponse = await axios.post(
-                    `${baseUrl}/upload`,
-                    formData,
-                    {
-                        headers: {
-                            Authorization: `Bearer ${sessionData?.token}`,
-                            'Content-Type': 'multipart/form-data',
-                        },
-                    }
-                )
-                uploadedAttachments = uploadResponse.data.files || []
+                try {
+                    const uploadResponse = await axios.post(
+                        `${baseUrl}/upload`,
+                        formData,
+                        {
+                            headers: {
+                                Authorization: `Bearer ${sessionData?.token}`,
+                                'Content-Type': 'multipart/form-data',
+                            },
+                        }
+                    )
+                    console.log("Upload response:", uploadResponse.data)
+                    console.log("Upload response data structure:", JSON.stringify(uploadResponse.data, null, 2))
+                    uploadedAttachments = uploadResponse.data.data?.files || []
+                    console.log("Uploaded attachments:", uploadedAttachments)
+                } catch (uploadError: any) {
+                    console.error("Upload failed:", uploadError.response?.data || uploadError.message)
+                    addToast({
+                        color: "danger",
+                        title: "Upload Failed",
+                        description: "Failed to upload supporting documents. Please try again.",
+                    })
+                    return
+                }
             }
 
             const response = await axios.post(
@@ -1372,6 +1399,49 @@ export default function LeaveRequests() {
                                                 <p className='text-sm text-zinc-600 dark:text-zinc-400 pl-6'>
                                                     {selectedRequest.reason}
                                                 </p>
+                                            </div>
+                                        )}
+
+                                        {/* Attachments */}
+                                        {selectedRequest.attachments && selectedRequest.attachments.length > 0 && (
+                                            <div className='px-1'>
+                                                <div className='flex items-center gap-2 mb-3'>
+                                                    <Paperclip className='size-4 text-zinc-400' />
+                                                    <span className='text-xs font-medium text-zinc-500 uppercase tracking-wider'>
+                                                        Supporting Documents
+                                                    </span>
+                                                </div>
+                                                <div className='space-y-2 pl-6'>
+                                                    {selectedRequest.attachments.map((attachment: any, index: number) => (
+                                                        <div key={index} className='flex items-center justify-between p-3 bg-zinc-50 dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-800'>
+                                                            <div className='flex items-center gap-3'>
+                                                                <div className='size-8 rounded bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center'>
+                                                                    <FileText className='size-4 text-zinc-500' />
+                                                                </div>
+                                                                <div>
+                                                                    <p className='text-sm font-medium text-zinc-700 dark:text-zinc-300'>
+                                                                        {attachment.filename}
+                                                                    </p>
+                                                                    <p className='text-xs text-zinc-500'>
+                                                                        {(attachment.size / 1024).toFixed(1)} KB • {attachment.fileType}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                            <Button
+                                                                size='sm'
+                                                                color='primary'
+                                                                variant='flat'
+                                                                startContent={<Download className='size-4' />}
+                                                                onPress={() => {
+                                                                    // Open the file in a new tab
+                                                                    window.open(attachment.url, '_blank')
+                                                                }}
+                                                            >
+                                                                View
+                                                            </Button>
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
                                         )}
 

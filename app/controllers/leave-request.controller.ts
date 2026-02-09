@@ -44,6 +44,12 @@ export class LeaveRequestController {
      * POST /api/leave-requests
      */
     static async createLeaveRequest(req: Request): Promise<ResponseObject> {
+        console.log("[LeaveRequest] createLeaveRequest called with:", {
+            body: req.body,
+            user: (req as any).user,
+            hasAttachments: !!(req.body.attachments && req.body.attachments.length > 0)
+        })
+        
         // Only use transactions if in replica set mode
         const useTransaction = this.isReplicaSet()
         let session: any = null
@@ -529,6 +535,11 @@ export class LeaveRequestController {
         } catch (error) {
             if (session) await session.abortTransaction()
             console.error("Error creating leave request:", error)
+            console.error("Error details:", {
+                message: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+                name: error instanceof Error ? error.name : undefined
+            })
             return errorResponseObject("Failed to create leave request")
         } finally {
             if (session) session.endSession()
