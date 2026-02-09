@@ -43,12 +43,17 @@ export const meta: Route.MetaFunction = () => {
     { name: "apple-mobile-web-app-title", content: "Nguvu Leave" },
     { name: "application-name", content: "Nguvu Leave" },
     { name: "msapplication-TileColor", content: "#2563eb" },
+    { rel: "icon", type: "image/png", href: "/nguvu-favicon.png" },
+    { rel: "shortcut icon", type: "image/png", href: "/nguvu-favicon.png" },
+    { rel: "apple-touch-icon", type: "image/png", href: "/nguvu-favicon.png" },
     { property: "og:title", content: "Nguvu Leave Management System" },
     { property: "og:description", content: "Comprehensive leave management system for tracking employee leave requests, balances, and approvals" },
     { property: "og:type", content: "website" },
+    { property: "og:image", content: "/nguvu-favicon.png" },
     { name: "twitter:card", content: "summary" },
     { name: "twitter:title", content: "Nguvu Leave Management System" },
     { name: "twitter:description", content: "Comprehensive leave management system for tracking employee leave requests, balances, and approvals" },
+    { name: "twitter:image", content: "/nguvu-favicon.png" },
   ];
 };
 
