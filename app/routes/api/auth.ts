@@ -15,6 +15,7 @@ import Staff from "~/models/staff.model"
 import { connectDB } from "~/database/connect"
 import { z } from "zod"
 import sendSMS from "~/utils/sendSMS"
+import { EmailService } from "~/services/email.service"
 
 // Environment variables
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
@@ -29,20 +30,40 @@ function validateSendOtpInput(body: any): {
 } {
     const errors: Array<{ field: string; message: string }> = []
 
-    if (!body.phone) {
-        errors.push({ field: "phone", message: "Phone number is required" })
-    } else if (typeof body.phone !== "string") {
-        errors.push({
-            field: "phone",
-            message: "Phone number must be a valid string",
-        })
-    } else if (body.phone.trim().length === 0) {
-        errors.push({ field: "phone", message: "Phone number cannot be empty" })
-    } else if (!/^\+?[0-9]{10,15}$/.test(body.phone.trim())) {
-        errors.push({
-            field: "phone",
-            message: "Please enter a valid phone number (10-15 digits)",
-        })
+    if (!body.phone && !body.email) {
+        errors.push({ field: "contact", message: "Phone number or email is required" })
+    }
+
+    if (body.phone) {
+        if (typeof body.phone !== "string") {
+            errors.push({
+                field: "phone",
+                message: "Phone number must be a valid string",
+            })
+        } else if (body.phone.trim().length === 0) {
+            errors.push({ field: "phone", message: "Phone number cannot be empty" })
+        } else if (!/^\+?[0-9]{10,15}$/.test(body.phone.trim())) {
+            errors.push({
+                field: "phone",
+                message: "Please enter a valid phone number (10-15 digits)",
+            })
+        }
+    }
+
+    if (body.email) {
+        if (typeof body.email !== "string") {
+            errors.push({
+                field: "email",
+                message: "Email must be a valid string",
+            })
+        } else if (body.email.trim().length === 0) {
+            errors.push({ field: "email", message: "Email cannot be empty" })
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim())) {
+            errors.push({
+                field: "email",
+                message: "Please enter a valid email address",
+            })
+        }
     }
 
     return errors.length > 0 ? { success: false, errors } : { success: true }
@@ -54,20 +75,40 @@ function validateVerifyOtpInput(body: any): {
 } {
     const errors: Array<{ field: string; message: string }> = []
 
-    if (!body.phone) {
-        errors.push({ field: "phone", message: "Phone number is required" })
-    } else if (typeof body.phone !== "string") {
-        errors.push({
-            field: "phone",
-            message: "Phone number must be a valid string",
-        })
-    } else if (body.phone.trim().length === 0) {
-        errors.push({ field: "phone", message: "Phone number cannot be empty" })
-    } else if (!/^\+?[0-9]{10,15}$/.test(body.phone.trim())) {
-        errors.push({
-            field: "phone",
-            message: "Please enter a valid phone number (10-15 digits)",
-        })
+    if (!body.phone && !body.email) {
+        errors.push({ field: "contact", message: "Phone number or email is required" })
+    }
+
+    if (body.phone) {
+        if (typeof body.phone !== "string") {
+            errors.push({
+                field: "phone",
+                message: "Phone number must be a valid string",
+            })
+        } else if (body.phone.trim().length === 0) {
+            errors.push({ field: "phone", message: "Phone number cannot be empty" })
+        } else if (!/^\+?[0-9]{10,15}$/.test(body.phone.trim())) {
+            errors.push({
+                field: "phone",
+                message: "Please enter a valid phone number (10-15 digits)",
+            })
+        }
+    }
+
+    if (body.email) {
+        if (typeof body.email !== "string") {
+            errors.push({
+                field: "email",
+                message: "Email must be a valid string",
+            })
+        } else if (body.email.trim().length === 0) {
+            errors.push({ field: "email", message: "Email cannot be empty" })
+        } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim())) {
+            errors.push({
+                field: "email",
+                message: "Please enter a valid email address",
+            })
+        }
     }
 
     if (!body.otp) {
@@ -555,39 +596,29 @@ async function handlePostOperations(
                 )
             }
 
-            const { phone } = body
+            const { phone, email } = body
 
-            console.log("[DEBUG send-otp] Searching for phone:", phone)
-            console.log("[DEBUG send-otp] Phone type:", typeof phone)
-            console.log("[DEBUG send-otp] Phone length:", phone?.length)
-
-            // Find staff by phone - include hidden OTP fields
+            // Find staff by phone or email - include hidden OTP fields
+            const query = phone ? { phone } : { email }
             const staff = await Staff.findOne({
-                phone,
+                ...query,
                 status: AccountStatus.ACTIVE,
             }).select("+otpCodeHash +otpExpiresAt")
 
-            console.log("[DEBUG send-otp] Staff found:", staff ? "YES" : "NO")
-            if (!staff) {
-                // Debug: List all staff phones
-                const allStaff = await Staff.find({}).select("phone status")
-                console.log("[DEBUG send-otp] All staff phones:", allStaff.map(s => ({ phone: s.phone, status: s.status })))
-            }
-
             if (!staff) {
                 return errorResponse(
-                    "No account found with this phone number",
+                    `No account found with this ${phone ? "phone number" : "email address"}`,
                     null,
                     404
                 )
             }
 
-            // Check for rate limiting (last OTP sent within 1 minute)
+            // Check for rate limiting (last OTP sent within 30 seconds)
             if (staff.otpExpiresAt) {
                 const timeSinceLastOTP =
                     Date.now() - (staff.otpExpiresAt.getTime() - OTP_EXPIRES_IN)
-                if (timeSinceLastOTP < 60000) {
-                    // 1 minute
+                if (timeSinceLastOTP < 30000) {
+                    // 30 seconds
                     return errorResponse(
                         "Please wait before requesting another OTP",
                         null,
@@ -605,11 +636,39 @@ async function handlePostOperations(
             staff.otpExpiresAt = new Date(Date.now() + OTP_EXPIRES_IN)
             await staff.save()
 
-            // Send OTP via SMS
-            await sendSMS({
-                recipient: phone,
-                smsText: `Your leave management login code is: ${otp}. Valid for 5 minutes.`,
-            })
+            // Send OTP via SMS for phone, or email for email
+            if (phone) {
+                await sendSMS({
+                    recipient: phone,
+                    smsText: `Your leave management login code is: ${otp}. Valid for 5 minutes.`,
+                })
+            } else {
+                // Send OTP via email immediately (not queued)
+                const emailHtml = `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <h2 style="color: #333; text-align: center;">Leave Management Login Code</h2>
+                        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                            <p style="font-size: 18px; margin: 0 0 10px 0;">Your one-time login code is:</p>
+                            <div style="background-color: #007bff; color: white; font-size: 24px; font-weight: bold; padding: 15px; border-radius: 4px; letter-spacing: 2px;">
+                                ${otp}
+                            </div>
+                        </div>
+                        <p style="color: #666; text-align: center; margin: 20px 0;">
+                            This code will expire in 5 minutes for security reasons.
+                        </p>
+                        <p style="color: #999; text-align: center; font-size: 14px;">
+                            If you didn't request this code, please ignore this email.
+                        </p>
+                    </div>
+                `;
+                
+                await EmailService.directSendMail({
+                    to: email,
+                    subject: "Your Leave Management Login Code",
+                    html: emailHtml,
+                    text: `Your leave management login code is: ${otp}. Valid for 5 minutes.`
+                });
+            }
 
             return successResponse("OTP sent successfully", {
                 expiresIn: 300, // seconds
@@ -625,16 +684,17 @@ async function handlePostOperations(
                 )
             }
 
-            const { phone, otp } = body
+            const { phone, email, otp } = body
 
             // Find staff and verify OTP - MUST select the hidden OTP fields
+            const query = phone ? { phone } : { email }
             const staff = await Staff.findOne({
-                phone,
+                ...query,
                 status: AccountStatus.ACTIVE,
             }).select("+otpCodeHash +otpExpiresAt")
 
             if (!staff) {
-                return errorResponse("Invalid phone number", null, 401)
+                return errorResponse(`Invalid ${phone ? "phone number" : "email address"}`, null, 401)
             }
 
             if (!staff.otpCodeHash || !staff.otpExpiresAt) {
@@ -692,29 +752,30 @@ async function handlePostOperations(
                 )
             }
 
-            const { phone } = body
+            const { phone, email } = body
 
             // Find staff - include hidden OTP fields
+            const query = phone ? { phone } : { email }
             const staff = await Staff.findOne({
-                phone,
+                ...query,
                 status: AccountStatus.ACTIVE,
             }).select("+otpCodeHash +otpExpiresAt")
 
             if (!staff) {
                 return errorResponse(
-                    "No account found with this phone number",
+                    `No account found with this ${phone ? "phone number" : "email address"}`,
                     null,
                     404
                 )
             }
 
-            // Rate limiting - wait at least 1 minute between OTP requests
+            // Rate limiting - wait at least 30 seconds between OTP requests
             if (staff.otpExpiresAt) {
                 const timeSinceLastOTP =
                     Date.now() - (staff.otpExpiresAt.getTime() - OTP_EXPIRES_IN)
-                if (timeSinceLastOTP < 60000) {
+                if (timeSinceLastOTP < 30000) {
                     const waitTime = Math.ceil(
-                        (60000 - timeSinceLastOTP) / 1000
+                        (30000 - timeSinceLastOTP) / 1000
                     )
                     return errorResponse(
                         `Please wait ${waitTime} seconds before requesting another OTP`,
@@ -733,10 +794,38 @@ async function handlePostOperations(
             await staff.save()
 
             // Send OTP
-            await sendSMS({
-                recipient: phone,
-                smsText: `Your leave management login code is: ${otp}. Valid for 5 minutes.`,
-            })
+            if (phone) {
+                await sendSMS({
+                    recipient: phone,
+                    smsText: `Your leave management login code is: ${otp}. Valid for 5 minutes.`,
+                })
+            } else {
+                // Send OTP via email immediately (not queued)
+                const emailHtml = `
+                    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                        <h2 style="color: #333; text-align: center;">Leave Management Login Code</h2>
+                        <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                            <p style="font-size: 18px; margin: 0 0 10px 0;">Your one-time login code is:</p>
+                            <div style="background-color: #007bff; color: white; font-size: 24px; font-weight: bold; padding: 15px; border-radius: 4px; letter-spacing: 2px;">
+                                ${otp}
+                            </div>
+                        </div>
+                        <p style="color: #666; text-align: center; margin: 20px 0;">
+                            This code will expire in 5 minutes for security reasons.
+                        </p>
+                        <p style="color: #999; text-align: center; font-size: 14px;">
+                            If you didn't request this code, please ignore this email.
+                        </p>
+                    </div>
+                `;
+                
+                await EmailService.directSendMail({
+                    to: email,
+                    subject: "Your Leave Management Login Code",
+                    html: emailHtml,
+                    text: `Your leave management login code is: ${otp}. Valid for 5 minutes.`
+                });
+            }
 
             return successResponse("OTP resent successfully", {
                 expiresIn: 300,

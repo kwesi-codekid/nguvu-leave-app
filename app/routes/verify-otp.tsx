@@ -1,6 +1,6 @@
 import { Button, InputOtp } from "@heroui/react"
 import { ActionFunctionArgs, redirect } from "react-router"
-import { Form, Link, useNavigation } from "react-router"
+import { Form, Link, useNavigation, useSearchParams } from "react-router"
 import axios from "axios"
 import {
     AuthSessionInterface,
@@ -13,10 +13,14 @@ import AuthLayout from "~/ui/layouts/auth-layout"
 
 export default function RequestOTP() {
     const navigation = useNavigation()
+    const [searchParams] = useSearchParams()
+    const phone = searchParams.get("phone")
+    const email = searchParams.get("email")
+    
     return (
         <AuthLayout
             title='Sign In To Your Account'
-            description='Enter the one-time password sent to your phone'
+            description={`Enter the one-time password sent to your ${phone ? 'phone' : 'email'}`}
         >
             <Form
                 method='post'
@@ -41,9 +45,9 @@ export default function RequestOTP() {
                     color='warning'
                     variant='light'
                     as={Link}
-                    to='/request-otp'
+                    to='/login-email'
                 >
-                    Change phone number
+                    Change {phone ? 'phone number' : 'email'}
                 </Button>
             </Form>
         </AuthLayout>
@@ -53,6 +57,7 @@ export default function RequestOTP() {
 export const action = async ({ request }: ActionFunctionArgs) => {
     const url = new URL(request.url)
     const phone = url.searchParams.get("phone")
+    const email = url.searchParams.get("email")
     const baseUrl = process.env.BASE_URL
     const flashSession = await getFlashSession(request.headers.get("Cookie"))
     const formData = await request.formData()
@@ -61,7 +66,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
         const response = await axios.post(`${baseUrl}/auth?op=verify-otp`, {
             otp,
-            phone,
+            ...(phone && { phone }),
+            ...(email && { email }),
         })
 
         console.log(response.data)
