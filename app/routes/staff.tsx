@@ -122,8 +122,8 @@ export default function Staff() {
         staffId: "",
         department: "",
         gender: "",
-        password: "",
         permissions: ["STAFF"] as string[],
+        profileImage: null as any,
     })
 
     // Form state for edit
@@ -136,6 +136,7 @@ export default function Staff() {
         gender: "",
         password: "",
         permissions: [] as string[],
+        profileImage: null as any,
     })
 
     const [isSubmitting, setIsSubmitting] = useState(false)
@@ -171,8 +172,8 @@ export default function Staff() {
                     staffId: formData.staffId || generateStaffId(),
                     department: formData.department,
                     gender: formData.gender,
-                    password: formData.password || undefined,
                     permissions: formData.permissions,
+                    profileImage: formData.profileImage,
                 },
                 {
                     headers: {
@@ -188,8 +189,8 @@ export default function Staff() {
                 staffId: "",
                 department: "",
                 gender: "",
-                password: "",
                 permissions: ["STAFF"],
+                profileImage: null,
             })
             mutate() // Refresh the list
             onClose()
@@ -225,10 +226,11 @@ export default function Staff() {
             phone: staff.phone,
             email: staff.email || "",
             staffId: staff.staffId,
-            department: (staff.department as any)?._id || "",
+            department: staff.department?._id || staff.department,
             gender: staff.gender,
             password: "",
             permissions: staff.permissions || [],
+            profileImage: staff.profileImage || null,
         })
         editDisclosure.onOpen()
     }
@@ -248,7 +250,7 @@ export default function Staff() {
                     staffId: editFormData.staffId,
                     department: editFormData.department,
                     gender: editFormData.gender,
-                    password: editFormData.password || undefined,
+                    profileImage: editFormData.profileImage,
                 },
                 {
                     headers: {
@@ -444,7 +446,7 @@ export default function Staff() {
                                     <StaffAvatar
                                         name={staff.name}
                                         profileImage={
-                                            staff.profileImage?.url || ""
+                                            staff.profileImage?.url || null
                                         }
                                         staffId={staff.staffId}
                                     />
@@ -538,7 +540,7 @@ export default function Staff() {
                                         <StaffAvatar
                                             name={staff.name}
                                             profileImage={
-                                                staff.profileImage?.url || ""
+                                                staff.profileImage?.url || null
                                             }
                                             staffId={staff.staffId}
                                         />
@@ -642,6 +644,42 @@ export default function Staff() {
                                             "border-zinc-200 dark:border-zinc-800",
                                     }}
                                 />
+                                <div className='flex flex-col gap-2'>
+                                    <label className='text-sm font-medium text-foreground-600'>
+                                        Profile Image (Optional)
+                                    </label>
+                                    <input
+                                        type='file'
+                                        accept='image/*'
+                                        onChange={(e) => {
+                                            const file = e.target.files?.[0]
+                                            if (file) {
+                                                // For now, just store the file info
+                                                // In a real implementation, you'd upload to cloud storage
+                                                setFormData({
+                                                    ...formData,
+                                                    profileImage: {
+                                                        url: URL.createObjectURL(file),
+                                                        publicId: file.name,
+                                                        filename: file.name,
+                                                        fileType: file.type,
+                                                        uploadedAt: new Date(),
+                                                    },
+                                                })
+                                            }
+                                        }}
+                                        className='block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer'
+                                    />
+                                    {formData.profileImage && (
+                                        <div className='mt-2'>
+                                            <img
+                                                src={formData.profileImage.url}
+                                                alt='Profile preview'
+                                                className='h-16 w-16 rounded-full object-cover'
+                                            />
+                                        </div>
+                                    )}
+                                </div>
                                 <Input
                                     label='Phone Number'
                                     variant='bordered'
@@ -667,22 +705,6 @@ export default function Staff() {
                                     onValueChange={(value) =>
                                         setFormData({ ...formData, email: value })
                                     }
-                                    classNames={{
-                                        inputWrapper:
-                                            "border-zinc-200 dark:border-zinc-800",
-                                    }}
-                                />
-                                <Input
-                                    label='Password'
-                                    variant='bordered'
-                                    labelPlacement='outside'
-                                    placeholder='Enter password (optional)'
-                                    type='password'
-                                    value={formData.password}
-                                    onValueChange={(value) =>
-                                        setFormData({ ...formData, password: value })
-                                    }
-                                    description='Leave empty if using OTP login only'
                                     classNames={{
                                         inputWrapper:
                                             "border-zinc-200 dark:border-zinc-800",
@@ -851,7 +873,7 @@ export default function Staff() {
                                                 <Avatar
                                                     src={
                                                         selectedStaff.profileImage
-                                                            ?.url
+                                                            ?.url || null
                                                     }
                                                     name={selectedStaff.name}
                                                     size='lg'
@@ -1124,6 +1146,40 @@ export default function Staff() {
                                             "border-zinc-200 dark:border-zinc-800",
                                     }}
                                 />
+                                <div className='flex flex-col gap-2'>
+                                    <label className='text-sm font-medium text-foreground-600'>
+                                        Profile Image (Optional)
+                                    </label>
+                                    <input
+                                        type='file'
+                                        accept='image/*'
+                                        onChange={(e) => {
+                                            const file = e.target.files?.[0]
+                                            if (file) {
+                                                setEditFormData({
+                                                    ...editFormData,
+                                                    profileImage: {
+                                                        url: URL.createObjectURL(file),
+                                                        publicId: file.name,
+                                                        filename: file.name,
+                                                        fileType: file.type,
+                                                        uploadedAt: new Date(),
+                                                    },
+                                                })
+                                            }
+                                        }}
+                                        className='block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer'
+                                    />
+                                    {editFormData.profileImage && (
+                                        <div className='mt-2'>
+                                            <img
+                                                src={editFormData.profileImage.url}
+                                                alt='Profile preview'
+                                                className='h-16 w-16 rounded-full object-cover'
+                                            />
+                                        </div>
+                                    )}
+                                </div>
                                 <Input
                                     label='Phone Number'
                                     variant='bordered'
@@ -1155,25 +1211,6 @@ export default function Staff() {
                                             email: value,
                                         })
                                     }
-                                    classNames={{
-                                        inputWrapper:
-                                            "border-zinc-200 dark:border-zinc-800",
-                                    }}
-                                />
-                                <Input
-                                    label='New Password'
-                                    variant='bordered'
-                                    labelPlacement='outside'
-                                    placeholder='Enter new password (optional)'
-                                    type='password'
-                                    value={editFormData.password}
-                                    onValueChange={(value) =>
-                                        setEditFormData({
-                                            ...editFormData,
-                                            password: value,
-                                        })
-                                    }
-                                    description='Leave empty to keep current password'
                                     classNames={{
                                         inputWrapper:
                                             "border-zinc-200 dark:border-zinc-800",

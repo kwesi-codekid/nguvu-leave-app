@@ -36,6 +36,7 @@ export class StaffController {
                 address,
                 emergencyContact,
                 password,
+                profileImage,
             } = req.body
             const user = (req as any).user // Assuming auth middleware adds user
 
@@ -168,6 +169,10 @@ export class StaffController {
                 }
             }
 
+            if (profileImage) {
+                staffData.profileImage = profileImage
+            }
+
             // Create staff member
             const newStaff = new Staff(staffData)
 
@@ -232,6 +237,7 @@ export class StaffController {
                 address,
                 emergencyContact,
                 password,
+                profileImage,
             } = req.body
             const user = (req as any).user
 
@@ -504,6 +510,22 @@ export class StaffController {
                     "Validation failed",
                     errors
                 )
+            }
+
+            // Profile image update
+            if (profileImage !== undefined) {
+                const imageChanged = 
+                    JSON.stringify(profileImage) !== 
+                    JSON.stringify(staff.profileImage || {})
+                if (imageChanged) {
+                    changes.push({
+                        field: "profileImage",
+                        oldValue: staff.profileImage || null,
+                        newValue: profileImage,
+                        fieldLabel: "Profile Image",
+                    })
+                    updates.profileImage = profileImage
+                }
             }
 
             // Handle password update (HR/Admin only)
