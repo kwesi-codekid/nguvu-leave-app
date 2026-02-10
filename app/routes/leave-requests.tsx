@@ -631,11 +631,34 @@ export default function LeaveRequests() {
 
     // Can withdraw check
     const canWithdraw = (request: any) => {
-        return (
-            request.staff?._id === sessionData?.user?.id &&
-            (request.status === LeaveStatus.PENDING ||
-                request.status === LeaveStatus.ENDORSED)
-        )
+        // Handle all possible staff data structures from API
+        let staffId = null
+        
+        if (request.staff?._id) {
+            staffId = request.staff._id
+        } else if (request.staff?.id) {
+            staffId = request.staff.id
+        } else if (typeof request.staff === 'string') {
+            staffId = request.staff
+        } else if (request.staffId) {
+            staffId = request.staffId
+        } else if (request.staff_id) {
+            staffId = request.staff_id
+        }
+        
+        const isOwner = staffId === sessionData?.user?.id
+        const status = request.status?.toLowerCase()
+        
+        // Allow withdrawal for various pending/early statuses
+        const withdrawableStatuses = [
+            LeaveStatus.PENDING, // "pending_endorsement"
+            LeaveStatus.ENDORSED, // "endorsed"
+            "pending", // in case API returns just "pending"
+            "pending_approval", // in case API returns this
+            "awaiting_endorsement", // alternative
+        ]
+        
+        return isOwner && withdrawableStatuses.includes(status)
     }
 
     // Render request row for table
@@ -911,6 +934,23 @@ export default function LeaveRequests() {
                                                 </div>
                                                 <p className='text-sm mt-2'>{formatDateRange(request.startDate, request.endDate)}</p>
                                                 <p className='text-xs text-zinc-500'>{request.workingDays} working day{request.workingDays !== 1 ? "s" : ""}</p>
+                                                {canWithdraw(request) && (
+                                                    <div className='mt-3 pt-3 border-t border-zinc-200 dark:border-zinc-700'>
+                                                        <Button
+                                                            size='sm'
+                                                            color='warning'
+                                                            variant='flat'
+                                                            startContent={<Undo2 className='size-4' />}
+                                                            onPress={() => {
+                                                                setSelectedRequest(request)
+                                                                withdrawDisclosure.onOpen()
+                                                            }}
+                                                            className='w-full'
+                                                        >
+                                                            Withdraw Request
+                                                        </Button>
+                                                    </div>
+                                                )}
                                             </div>
                                         ),
                                     }))}
