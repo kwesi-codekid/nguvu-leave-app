@@ -44,6 +44,12 @@ export class LeaveRequestController {
      * POST /api/leave-requests
      */
     static async createLeaveRequest(req: Request): Promise<ResponseObject> {
+        console.log("[LeaveRequest] createLeaveRequest called with:", {
+            body: req.body,
+            user: (req as any).user,
+            hasAttachments: !!(req.body.attachments && req.body.attachments.length > 0)
+        })
+        
         // Only use transactions if in replica set mode
         const useTransaction = this.isReplicaSet()
         let session: any = null
@@ -529,6 +535,11 @@ export class LeaveRequestController {
         } catch (error) {
             if (session) await session.abortTransaction()
             console.error("Error creating leave request:", error)
+            console.error("Error details:", {
+                message: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+                name: error instanceof Error ? error.name : undefined
+            })
             return errorResponseObject("Failed to create leave request")
         } finally {
             if (session) session.endSession()
@@ -574,8 +585,20 @@ export class LeaveRequestController {
             }
 
             // Check ownership or HR/Admin
+            let staffId: string | null = null
+            
+            if (request.staff) {
+                if (typeof request.staff === 'object') {
+                    // Populated document - get _id from the populated object
+                    staffId = (request.staff as any)._id?.toString()
+                } else if (typeof request.staff === 'string') {
+                    // Not populated, it's just the ObjectId string
+                    staffId = request.staff.toString()
+                }
+            }
+            
             if (
-                request.staff.toString() !== user._id &&
+                !staffId || staffId !== user._id.toString() &&
                 !user?.permissions?.includes("HR") &&
                 !user?.permissions?.includes("ADMIN")
             ) {
@@ -878,8 +901,20 @@ export class LeaveRequestController {
             }
 
             // Check ownership or HR/Admin
+            let staffId: string | null = null
+            
+            if (request.staff) {
+                if (typeof request.staff === 'object') {
+                    // Populated document - get _id from the populated object
+                    staffId = (request.staff as any)._id?.toString()
+                } else if (typeof request.staff === 'string') {
+                    // Not populated, it's just the ObjectId string
+                    staffId = request.staff.toString()
+                }
+            }
+            
             if (
-                request.staff.toString() !== user._id &&
+                !staffId || staffId !== user._id.toString() &&
                 !user?.permissions?.includes("HR") &&
                 !user?.permissions?.includes("ADMIN")
             ) {
@@ -944,15 +979,6 @@ export class LeaveRequestController {
                 ])
             }
 
-            if (!reason || !reason.trim()) {
-                return validationErrorResponseObject("Validation failed", [
-                    {
-                        field: "reason",
-                        message: "Withdrawal reason is required",
-                    },
-                ])
-            }
-
             // Find request
             const request = await LeaveRequest.findById(id).populate(
                 "staff",
@@ -963,8 +989,20 @@ export class LeaveRequestController {
                 return errorResponseObject("Leave request not found")
             }
 
-            // Check ownership
-            if ((request.staff as any)._id.toString() !== user._id) {
+            // Check ownership - handle different staff data structures
+            let staffId: string | null = null
+            
+            if (request.staff) {
+                if (typeof request.staff === 'object') {
+                    // Populated document - get _id from the populated object
+                    staffId = (request.staff as any)._id?.toString()
+                } else if (typeof request.staff === 'string') {
+                    // Not populated, it's just the ObjectId string
+                    staffId = request.staff.toString()
+                }
+            }
+            
+            if (!staffId || staffId !== user._id.toString()) {
                 return errorResponseObject(
                     "You can only withdraw your own requests"
                 )
@@ -985,7 +1023,7 @@ export class LeaveRequestController {
             request.cancellation = {
                 byStaff: user._id,
                 at: new Date(),
-                reason: reason.trim(),
+                reason: reason?.trim() || "No reason provided",
             }
 
             await request.save()
@@ -998,11 +1036,11 @@ export class LeaveRequestController {
                 performedBy: user._id,
                 performedByName: user.name,
                 performedByEmail: user.email,
-                description: `Withdrew ${request.status} leave request`,
+                description: `Leave request withdrawn (was ${request.status})`,
                 metadata: {
                     leaveType: request.leaveType,
                     previousStatus: request.status,
-                    reason,
+                    reason: reason?.trim() || "No reason provided",
                     workingDays: request.workingDays,
                 },
                 ipAddress: req.ip || req.socket.remoteAddress,
@@ -1689,8 +1727,20 @@ export class LeaveRequestController {
             }
 
             // Check authorization
+            let staffId: string | null = null
+            
+            if (request.staff) {
+                if (typeof request.staff === 'object') {
+                    // Populated document - get _id from the populated object
+                    staffId = (request.staff as any)._id?.toString()
+                } else if (typeof request.staff === 'string') {
+                    // Not populated, it's just the ObjectId string
+                    staffId = request.staff.toString()
+                }
+            }
+            
             if (
-                (request.staff as any)._id.toString() !== user._id &&
+                !staffId || staffId !== user._id.toString() &&
                 !user?.permissions?.includes("HR") &&
                 !user?.permissions?.includes("ADMIN")
             ) {
@@ -1950,8 +2000,20 @@ export class LeaveRequestController {
             }
 
             // Check authorization
+            let staffId: string | null = null
+            
+            if (request.staff) {
+                if (typeof request.staff === 'object') {
+                    // Populated document - get _id from the populated object
+                    staffId = (request.staff as any)._id?.toString()
+                } else if (typeof request.staff === 'string') {
+                    // Not populated, it's just the ObjectId string
+                    staffId = request.staff.toString()
+                }
+            }
+            
             const canView =
-                (request.staff as any)._id.toString() === user._id ||
+                (staffId === user._id.toString()) ||
                 user?.permissions?.includes("HR") ||
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER")

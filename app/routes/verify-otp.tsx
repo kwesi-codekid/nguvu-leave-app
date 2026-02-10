@@ -45,7 +45,7 @@ export default function RequestOTP() {
                     color='warning'
                     variant='light'
                     as={Link}
-                    to='/login-email'
+                    to='/'
                 >
                     Change {phone ? 'phone number' : 'email'}
                 </Button>

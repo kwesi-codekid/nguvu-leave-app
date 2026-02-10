@@ -1,5 +1,6 @@
 import { createWriteStream, existsSync, mkdirSync } from "fs"
 import { join } from "path"
+import { type MetaFunction } from "react-router"
 import { getSessionData } from "~/auth-session"
 import { successResponse, errorResponse, validationErrorResponse } from "~/utils/api-utils"
 
@@ -10,7 +11,22 @@ if (!existsSync(UPLOAD_DIR)) {
     mkdirSync(UPLOAD_DIR, { recursive: true })
 }
 
+export const meta: MetaFunction = () => {
+    return [
+        { title: "Upload API" },
+        { name: "description", content: "API endpoint for file uploads" },
+    ]
+}
+
+export async function loader() {
+    return errorResponse("Method not allowed. Use POST for file uploads.", null, 405)
+}
+
 export async function action({ request }: { request: Request }) {
+    if (request.method !== "POST") {
+        return errorResponse("Method not allowed", null, 405)
+    }
+    
     try {
         const sessionData = await getSessionData(request)
         if (!sessionData?.token) {
@@ -49,7 +65,8 @@ export async function action({ request }: { request: Request }) {
                 publicId: filename,
                 filename: file.name,
                 size: file.size,
-                type: file.type
+                fileType: file.type,  // Changed from 'type' to 'fileType'
+                uploadedAt: new Date()  // Added required uploadedAt field
             })
         }
 

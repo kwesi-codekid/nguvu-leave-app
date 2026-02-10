@@ -135,7 +135,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 // POST /api/leave-requests
 export async function action({ request }: ActionFunctionArgs) {
-  if (request.method !== "POST") {
+  if (!["POST", "PATCH"].includes(request.method)) {
     return errorResponse("Method not allowed", null, 405)
   }
 
@@ -173,6 +173,60 @@ export async function action({ request }: ActionFunctionArgs) {
       socket: { remoteAddress: "127.0.0.1" },
     } as any
 
+    // Handle PATCH operations for leave request actions
+    if (request.method === "PATCH") {
+      const id = url.pathname.split("/").pop()
+      
+      if (!id) {
+        return errorResponse("Leave request ID is required", null, 400)
+      }
+
+      switch (op) {
+        case "withdraw": {
+          const result = await LeaveRequestController.withdrawRequest(req, id)
+          return result.status === "success"
+            ? successResponse(result.message, result.data)
+            : errorResponse(result.message, null, 500)
+        }
+        
+        case "endorse": {
+          const result = await LeaveRequestController.endorseRequest(req, id)
+          return result.status === "success"
+            ? successResponse(result.message, result.data)
+            : errorResponse(result.message, null, 500)
+        }
+        
+        case "approve": {
+          const result = await LeaveRequestController.approveRequest(req, id)
+          return result.status === "success"
+            ? successResponse(result.message, result.data)
+            : errorResponse(result.message, null, 500)
+        }
+        
+        case "reject": {
+          const result = await LeaveRequestController.rejectRequest(req, id)
+          return result.status === "success"
+            ? successResponse(result.message, result.data)
+            : errorResponse(result.message, null, 500)
+        }
+        
+        case "terminate": {
+          const result = await LeaveRequestController.terminateRequest(req, id)
+          return result.status === "success"
+            ? successResponse(result.message, result.data)
+            : errorResponse(result.message, null, 500)
+        }
+        
+        default:
+          return errorResponse(
+            "Invalid operation. Valid PATCH operations: withdraw, endorse, approve, reject, terminate",
+            null,
+            400
+          )
+      }
+    }
+
+    // Handle POST operations
     switch (op) {
       case "calculate-period": {
         // Calculate period and resumption date

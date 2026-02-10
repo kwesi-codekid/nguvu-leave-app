@@ -94,7 +94,12 @@ export default function StaffContracts() {
 
     const { data, isLoading, error, mutate } = useSWR(
         `${baseUrl}/contracts?op=${op}&search=${search}&limit=${limit}&page=${page}`,
-        fetcher(sessionData?.token as string)
+        fetcher(sessionData?.token as string),
+        {
+            revalidateOnFocus: true,
+            revalidateOnReconnect: true,
+            refreshInterval: 0
+        }
     )
     const departmentsStats = useSWR(
         `${baseUrl}/departments?op=statistics`,
@@ -207,7 +212,7 @@ export default function StaffContracts() {
                 salary: "",
                 currency: "GHS",
             })
-            await mutate() // Refresh the list
+            await mutate(`${baseUrl}/contracts?op=${op}&search=${search}&limit=${limit}&page=${page}`) // Refresh the list
             onClose()
             addToast({
                 color: "success",
@@ -278,7 +283,7 @@ export default function StaffContracts() {
                 }
             )
 
-            await mutate() // Refresh the list
+            await mutate(`${baseUrl}/contracts?op=${op}&search=${search}&limit=${limit}&page=${page}`) // Refresh the list
             onClose()
             addToast({
                 color: "success",
@@ -319,7 +324,7 @@ export default function StaffContracts() {
                     },
                 }
             )
-            await mutate() // Refresh the list
+            await mutate(`${baseUrl}/contracts?op=${op}&search=${search}&limit=${limit}&page=${page}`) // Refresh the list
             onClose()
             addToast({
                 color: "success",
@@ -354,7 +359,7 @@ export default function StaffContracts() {
                     },
                 }
             )
-            await mutate()
+            await mutate(`${baseUrl}/contracts?op=${op}&search=${search}&limit=${limit}&page=${page}`)
             addToast({
                 color: "success",
                 title: "Success",
@@ -395,7 +400,7 @@ export default function StaffContracts() {
                     },
                 }
             )
-            await mutate()
+            await mutate(`${baseUrl}/contracts?op=${op}&search=${search}&limit=${limit}&page=${page}`)
             onClose()
             setTerminationReason("")
             addToast({

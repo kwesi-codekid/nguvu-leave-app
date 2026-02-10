@@ -303,7 +303,7 @@ export default function AppLayout({
                     </div>
                 </header>
                 {/* main content */}
-                <main className='flex-1 w-full 2xl:mx-auto 2xl:max-w-[90rem]  p-4 relative rounded rounded-tl-lg'>
+                <main className='flex-1 w-full 2xl:mx-auto 2xl:max-w-[90rem]  lg:p-4 relative rounded rounded-tl-lg'>
                     {pageLoading || navigation.state === "loading" ? (
                         <div className='absolute inset-0 flex items-center justify-center'>
                             <div className='animate-spin rounded-full h-8 w-8 border-b-2 border-warning'></div>

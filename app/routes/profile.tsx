@@ -95,6 +95,7 @@ export default function Profile() {
         emergencyContactName: "",
         emergencyContactPhone: "",
         emergencyContactRelation: "",
+        profileImage: null as any,
     })
     const [isUpdatingProfile, setIsUpdatingProfile] = useState(false)
 
@@ -131,6 +132,7 @@ export default function Profile() {
             emergencyContactName: staff?.emergencyContact?.name || "",
             emergencyContactPhone: staff?.emergencyContact?.phone || "",
             emergencyContactRelation: staff?.emergencyContact?.relation || "",
+            profileImage: staff?.profileImage || null,
         })
         editProfileModal.onOpen()
     }
@@ -153,6 +155,9 @@ export default function Profile() {
                     phone: profileForm.emergencyContactPhone,
                     relation: profileForm.emergencyContactRelation,
                 }
+            }
+            if (profileForm.profileImage && JSON.stringify(profileForm.profileImage) !== JSON.stringify(staff?.profileImage)) {
+                payload.profileImage = profileForm.profileImage
             }
 
             if (Object.keys(payload).length === 0) {
@@ -277,7 +282,7 @@ export default function Profile() {
                         <div className="flex flex-col md:flex-row gap-6 items-start md:items-center">
                             <div className="flex-shrink-0">
                                 <Avatar
-                                    src={staff?.profilePicture}
+                                    src={staff?.profileImage?.url}
                                     name={staff?.name}
                                     size="lg"
                                     className="w-24 h-24"
@@ -588,6 +593,41 @@ export default function Profile() {
                                         variant="bordered"
                                         startContent={<User className="size-4 text-zinc-400" />}
                                     />
+                                    <div className="flex flex-col gap-2">
+                                        <label className="text-sm font-medium text-foreground-600">
+                                            Profile Image (Optional)
+                                        </label>
+                                        <input
+                                            type="file"
+                                            accept="image/*"
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0]
+                                                if (file) {
+                                                    setProfileForm({
+                                                        ...profileForm,
+                                                        profileImage: {
+                                                            url: URL.createObjectURL(file),
+                                                            publicId: file.name,
+                                                            filename: file.name,
+                                                            fileType: file.type,
+                                                            uploadedAt: new Date(),
+                                                        },
+                                                    })
+                                                }
+                                            }}
+                                            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"
+                                        />
+                                        {profileForm.profileImage && (
+                                            <div className="mt-2">
+                                                <img
+                                                    src={profileForm.profileImage.url}
+                                                    alt="Profile preview"
+                                                    className="h-16 w-16 rounded-full object-cover"
+                                                />
+                                            </div>
+                                        )}
+                                    </div>
+                                    <Divider />
                                     <Input
                                         label="Phone Number"
                                         placeholder="Enter your phone number"

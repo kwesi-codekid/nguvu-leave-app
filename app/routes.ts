@@ -48,6 +48,7 @@ export default [
     route("api/notifications", "routes/api/notifications.ts"),
     route("api/notifications/:id", "routes/api/notifications.[id].ts"),
     route("api/ai", "routes/api/ai.ts"),
+    route("api/upload", "routes/api/upload.ts"),
 
     // Notifications page
     route("notifications", "routes/notifications.tsx"),
