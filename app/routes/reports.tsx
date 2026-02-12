@@ -13,6 +13,12 @@ import {
     Tabs,
     Progress,
     Skeleton,
+    Table,
+    TableHeader,
+    TableColumn,
+    TableBody,
+    TableRow,
+    TableCell,
 } from "@heroui/react"
 import { useState } from "react"
 import axios from "axios"
@@ -24,6 +30,7 @@ import useSWR from "swr"
 import { DateTime } from "luxon"
 import { fetcher } from "~/ui/lib/fetcher"
 import { LeaveTypes, LeaveStatus } from "~/utils/types"
+import { LeaveStatusChip, LeaveTypeChip } from "~/ui/components/chips"
 import {
     BarChart3,
     Calendar,
@@ -586,6 +593,121 @@ export default function Reports() {
                                                         <Chip size="sm" color="warning" variant="flat">{staff.totalDays}d</Chip>
                                                     </div>
                                                 ))}
+                                            </div>
+                                        </CardBody>
+                                    </Card>
+                                )}
+
+                                {/* Leave Requests Details Table */}
+                                {Array.isArray(leaveRequestsReport.data.details) && leaveRequestsReport.data.details.length > 0 && (
+                                    <Card className="bg-content1 border border-zinc-200 dark:border-zinc-800">
+                                        <CardHeader className="pb-0">
+                                            <div className="flex items-center justify-between w-full">
+                                                <div className="flex items-center gap-2">
+                                                    <FileText className="size-5 text-primary" />
+                                                    <h3 className="font-semibold">Leave Requests Details</h3>
+                                                    <Chip size="sm" variant="flat" color="default">
+                                                        {leaveRequestsReport.data.details.length} records
+                                                    </Chip>
+                                                </div>
+                                                <Button
+                                                    size="sm"
+                                                    color="warning"
+                                                    variant="flat"
+                                                    startContent={<Download className="size-4" />}
+                                                    onPress={() => handleExport("leave-requests")}
+                                                    isLoading={isExporting}
+                                                >
+                                                    Export CSV
+                                                </Button>
+                                            </div>
+                                        </CardHeader>
+                                        <CardBody className="overflow-x-auto">
+                                            <Table
+                                                aria-label="Leave requests details"
+                                                classNames={{
+                                                    base: "max-h-[500px] overflow-y-auto",
+                                                    wrapper: "bg-transparent shadow-none",
+                                                    td: "text-sm",
+                                                    thead: "sticky top-0 z-10",
+                                                    th: "dark:bg-zinc-900 bg-zinc-100 text-xs uppercase",
+                                                }}
+                                            >
+                                                <TableHeader>
+                                                    <TableColumn>Staff</TableColumn>
+                                                    <TableColumn>Department</TableColumn>
+                                                    <TableColumn>Leave Type</TableColumn>
+                                                    <TableColumn>Start Date</TableColumn>
+                                                    <TableColumn>End Date</TableColumn>
+                                                    <TableColumn>Days</TableColumn>
+                                                    <TableColumn>Status</TableColumn>
+                                                    <TableColumn>Reason</TableColumn>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    {leaveRequestsReport.data.details.map((request: any) => (
+                                                        <TableRow key={request._id}>
+                                                            <TableCell>
+                                                                <div className="flex flex-col">
+                                                                    <span className="font-medium text-sm">{request.staff?.name}</span>
+                                                                    <span className="text-xs text-zinc-500">{request.staff?.staffId}</span>
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm">{request.department?.name || "—"}</span>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <LeaveTypeChip type={request.leaveType} />
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm whitespace-nowrap">
+                                                                    {DateTime.fromISO(request.startDate).toFormat("dd MMM yyyy")}
+                                                                </span>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm whitespace-nowrap">
+                                                                    {DateTime.fromISO(request.endDate).toFormat("dd MMM yyyy")}
+                                                                </span>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm font-medium">{request.workingDays}</span>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <LeaveStatusChip status={request.status} />
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm text-zinc-500 max-w-[200px] truncate block">
+                                                                    {request.reason || "—"}
+                                                                </span>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    ))}
+                                                </TableBody>
+                                            </Table>
+                                        </CardBody>
+                                    </Card>
+                                )}
+
+                                {/* Note when details exceed limit */}
+                                {typeof leaveRequestsReport.data.details === "string" && (
+                                    <Card className="border border-warning-200 dark:border-warning-800 bg-warning-50 dark:bg-warning-900/10">
+                                        <CardBody className="p-4">
+                                            <div className="flex items-center gap-3">
+                                                <AlertTriangle className="size-5 text-warning-600 flex-shrink-0" />
+                                                <div className="flex-1">
+                                                    <p className="text-sm text-warning-700 dark:text-warning-400">
+                                                        Too many records to display in table. Use the Export CSV button to download the full dataset.
+                                                    </p>
+                                                </div>
+                                                <Button
+                                                    size="sm"
+                                                    color="warning"
+                                                    variant="flat"
+                                                    startContent={<Download className="size-4" />}
+                                                    onPress={() => handleExport("leave-requests")}
+                                                    isLoading={isExporting}
+                                                >
+                                                    Export CSV
+                                                </Button>
                                             </div>
                                         </CardBody>
                                     </Card>
