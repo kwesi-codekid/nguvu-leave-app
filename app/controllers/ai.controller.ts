@@ -10,6 +10,22 @@ import ChatConversation, { ChatMode } from "../models/chat-conversation.model"
 
 export class AIController {
     /**
+     * Helper function to check if user has AI assistant access
+     */
+    private static hasAIAssistantPermission(user: any): boolean {
+        if (!user || !user.permissions) {
+            return false
+        }
+        
+        // Get allowed permissions from environment or use defaults
+        const allowedPermissions = process.env.AI_ASSISTANT_PERMISSIONS?.split(",") || ["STAFF", "HR", "ADMIN", "MANAGER"]
+        
+        return user.permissions.some((permission: string) => 
+            allowedPermissions.includes(permission.trim().toUpperCase())
+        )
+    }
+
+    /**
      * Get Smart Leave Recommendations
      * POST /api/ai?op=recommendations
      */
@@ -21,18 +37,27 @@ export class AIController {
                 return errorResponseObject("Unauthorized")
             }
 
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
+            }
+
             const { staffId, leaveType, preferredMonth, numberOfDays } = req.body
 
-            // Staff can only get recommendations for themselves unless they're HR/Admin
+            // Staff can only get recommendations for themselves
             const targetStaffId = staffId || user._id.toString()
 
+            // Enforce data access rules
             if (
                 targetStaffId !== user._id.toString() &&
                 !user.permissions?.includes("HR") &&
-                !user.permissions?.includes("ADMIN")
+                !user.permissions?.includes("ADMIN") &&
+                !user.permissions?.includes("MANAGER")
             ) {
                 return errorResponseObject(
-                    "You can only get recommendations for yourself"
+                    "You can only get leave recommendations for yourself"
                 )
             }
 
@@ -73,6 +98,13 @@ export class AIController {
 
             if (!user) {
                 return errorResponseObject("Unauthorized")
+            }
+
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
             }
 
             // Only HR/Admin/Manager can analyze patterns
@@ -117,7 +149,9 @@ export class AIController {
             const analysis = await AIService.analyzeLeavePatterns(
                 analysisScope as "company" | "department" | "staff",
                 scopeId as string,
-                timeframeDays ? parseInt(timeframeDays as string) : 365
+                timeframeDays ? parseInt(timeframeDays as string) : 365,
+                user._id.toString(),
+                user.permissions || []
             )
 
             return successResponseObject(
@@ -144,6 +178,13 @@ export class AIController {
 
             if (!user) {
                 return errorResponseObject("Unauthorized")
+            }
+
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
             }
 
             // Only HR/Admin can generate AI reports
@@ -191,7 +232,9 @@ export class AIController {
                 type as "monthly" | "quarterly" | "annual" | "custom",
                 start,
                 end,
-                departmentId as string
+                departmentId as string,
+                user._id.toString(),
+                user.permissions || []
             )
 
             return successResponseObject(
@@ -218,6 +261,13 @@ export class AIController {
 
             if (!user) {
                 return errorResponseObject("Unauthorized")
+            }
+
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
             }
 
             const { query } = req.body
@@ -262,6 +312,13 @@ export class AIController {
 
             if (!user) {
                 return errorResponseObject("Unauthorized")
+            }
+
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
             }
 
             const { message, conversationId, mode } = req.body
@@ -340,6 +397,13 @@ export class AIController {
                 return errorResponseObject("Unauthorized")
             }
 
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
+            }
+
             const { limit, skip, search } = req.query
 
             let conversations
@@ -388,6 +452,13 @@ export class AIController {
                 return errorResponseObject("Unauthorized")
             }
 
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
+            }
+
             const { id } = req.query
 
             if (!id) {
@@ -428,6 +499,13 @@ export class AIController {
                 return errorResponseObject("Unauthorized")
             }
 
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
+            }
+
             const { mode, title } = req.body
 
             const conversation = await ChatConversation.createConversation(
@@ -464,6 +542,13 @@ export class AIController {
 
             if (!user) {
                 return errorResponseObject("Unauthorized")
+            }
+
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
             }
 
             const { conversationId } = req.body
@@ -504,6 +589,13 @@ export class AIController {
 
             if (!user) {
                 return errorResponseObject("Unauthorized")
+            }
+
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
             }
 
             const { conversationId } = req.body
@@ -549,6 +641,13 @@ export class AIController {
 
             if (!user) {
                 return errorResponseObject("Unauthorized")
+            }
+
+            // Check AI assistant permission
+            if (!this.hasAIAssistantPermission(user)) {
+                return errorResponseObject(
+                    "You don't have permission to access AI assistant features. This feature is restricted to authorized roles."
+                )
             }
 
             const { conversationId, title } = req.body

@@ -18,6 +18,8 @@ import {
     ModalContent,
     ModalFooter,
     ModalHeader,
+    Select,
+    SelectItem,
     TableCell,
     TableRow,
     Tooltip,
@@ -42,8 +44,10 @@ import {
     UserCheck,
     Users,
     XCircle,
+    Download,
 } from "lucide-react"
 import useSWR from "swr"
+import { DateTime } from "luxon"
 import { isAuthenticated, getSessionData } from "~/auth-session"
 import { JobPositionAvatar } from "~/ui/components/avatars"
 import { DataTable } from "~/ui/components/data-table"
@@ -52,6 +56,7 @@ import { MobileList } from "~/ui/components/lists"
 import { ApprovalFlow, OccupancyChips } from "~/ui/fragments/job-positions"
 import AppLayout from "~/ui/layouts/app-layout"
 import { fetcher } from "~/ui/lib/fetcher"
+import { exportData, formatters, ExportFormat } from "~/ui/lib/export-utils"
 import {
     DepartmentInterface,
     JobPositionInterface,
@@ -87,6 +92,7 @@ export default function JobPositions() {
     // Selected position for view/edit/delete
     const [selectedPosition, setSelectedPosition] =
         useState<JobPositionInterface | null>(null)
+    const [selectedExportFormat, setSelectedExportFormat] = useState<ExportFormat>("csv")
 
     // Form state for create
     const [formData, setFormData] = useState({
@@ -279,6 +285,41 @@ export default function JobPositions() {
         }
     }
 
+    // Handle export job positions data
+    const handleExportJobPositions = () => {
+        if (!data?.data?.positions || data.data.positions.length === 0) {
+            addToast({
+                color: "warning",
+                title: "No Data",
+                description: "No job position data available to export",
+            })
+            return
+        }
+
+        const exportColumns = [
+            { key: "title", label: "Position Title" },
+            { key: "department.name", label: "Department", formatter: formatters.department },
+            { key: "maxOccupancy", label: "Max Occupancy" },
+            { key: "occupancy.current", label: "Current Occupancy" },
+            { key: "endorserPosition.title", label: "Endorser Position" },
+            { key: "approverPosition.title", label: "Approver Position" },
+            { key: "isActive", label: "Active Status", formatter: formatters.boolean },
+        ]
+
+        exportData(
+            data.data.positions,
+            exportColumns,
+            selectedExportFormat,
+            `job-positions-export-${DateTime.now().toFormat("yyyy-MM-dd_HH-mm-ss")}`
+        )
+
+        addToast({
+            color: "success",
+            title: "Export Complete",
+            description: `Job positions data exported successfully as ${selectedExportFormat.toUpperCase()}`,
+        })
+    }
+
     return (
         <AppLayout user={sessionData.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-8'>
@@ -290,13 +331,38 @@ export default function JobPositions() {
                             View, create and manage job positions
                         </p>
                     </div>
-                    <Button
-                        color='warning'
-                        size='sm'
-                        onPress={createDisclosure.onOpen}
-                    >
-                        Add Position
-                    </Button>
+                    <div className='flex items-center gap-2'>
+                        <Select
+                            size='sm'
+                            radius='sm'
+                            variant='bordered'
+                            className='w-24'
+                            selectedKeys={[selectedExportFormat]}
+                            aria-label='Export Format'
+                            onSelectionChange={(keys) => setSelectedExportFormat(Array.from(keys)[0] as ExportFormat)}
+                        >
+                            <SelectItem key='csv'>CSV</SelectItem>
+                            <SelectItem key='excel'>Excel</SelectItem>
+                            <SelectItem key='pdf'>PDF</SelectItem>
+                        </Select>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            startContent={<Download className='size-4' />}
+                            onPress={handleExportJobPositions}
+                            isDisabled={isLoading || !data?.data?.positions?.length}
+                        >
+                            Export
+                        </Button>
+                        <Button
+                            color='warning'
+                            size='sm'
+                            onPress={createDisclosure.onOpen}
+                        >
+                            Add Position
+                        </Button>
+                    </div>
                 </div>
 
                 {/* job position list */}

@@ -9,7 +9,7 @@ interface AuthSessionInterface {
         email?: string
         phone: string
         name: string
-        department: string
+        department: string // Department ID
         permissions: string[]
         profilePicture?: string
         jobTitle?: string

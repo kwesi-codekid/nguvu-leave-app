@@ -23,6 +23,8 @@ import {
     Tooltip,
     useDisclosure,
     addToast,
+    Select,
+    SelectItem,
 } from "@heroui/react"
 import { useState } from "react"
 import axios from "axios"
@@ -43,8 +45,10 @@ import {
     User,
     Users,
     XCircle,
+    Download,
 } from "lucide-react"
 import useSWR from "swr"
+import { DateTime } from "luxon"
 import {
     getSessionData,
     isAuthenticated as checkAuthenticated,
@@ -55,6 +59,7 @@ import { SearchInput } from "~/ui/components/inputs"
 import { DepartmentStatsSection } from "~/ui/fragments/department-stats"
 import AppLayout from "~/ui/layouts/app-layout"
 import { fetcher } from "~/ui/lib/fetcher"
+import { exportData, formatters, ExportFormat } from "~/ui/lib/export-utils"
 import { DepartmentInterface } from "~/utils/types"
 
 export default function Departments() {
@@ -93,6 +98,7 @@ export default function Departments() {
 
     // Selected department for view/edit/delete
     const [selectedDepartment, setSelectedDepartment] = useState<DepartmentInterface | null>(null)
+    const [selectedExportFormat, setSelectedExportFormat] = useState<ExportFormat>("csv")
 
     // Form state for create (no head - will be assigned after staff are added)
     const [formData, setFormData] = useState({
@@ -273,6 +279,38 @@ export default function Departments() {
         }
     }
 
+    // Handle export departments data
+    const handleExportDepartments = () => {
+        if (!data?.data?.departments || data.data.departments.length === 0) {
+            addToast({
+                color: "warning",
+                title: "No Data",
+                description: "No department data available to export",
+            })
+            return
+        }
+
+        const exportColumns = [
+            { key: "name", label: "Department Name" },
+            { key: "description", label: "Description" },
+            { key: "head.name", label: "Department Head", formatter: formatters.staffName },
+            { key: "staffCount", label: "Staff Count" },
+        ]
+
+        exportData(
+            data.data.departments,
+            exportColumns,
+            selectedExportFormat,
+            `departments-export-${DateTime.now().toFormat("yyyy-MM-dd_HH-mm-ss")}`
+        )
+
+        addToast({
+            color: "success",
+            title: "Export Complete",
+            description: `Department data exported successfully as ${selectedExportFormat.toUpperCase()}`,
+        })
+    }
+
     return (
         <AppLayout user={sessionData.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-8'>
@@ -284,7 +322,30 @@ export default function Departments() {
                             View, create and manage departments
                         </p>
                     </div>
-                    <div>
+                    <div className='flex items-center gap-2'>
+                        <Select
+                            size='sm'
+                            radius='sm'
+                            variant='bordered'
+                            className='w-24'
+                            selectedKeys={[selectedExportFormat]}
+                            aria-label='Export Format'
+                            onSelectionChange={(keys) => setSelectedExportFormat(Array.from(keys)[0] as ExportFormat)}
+                        >
+                            <SelectItem key='csv'>CSV</SelectItem>
+                            <SelectItem key='excel'>Excel</SelectItem>
+                            <SelectItem key='pdf'>PDF</SelectItem>
+                        </Select>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            startContent={<Download className='size-4' />}
+                            onPress={handleExportDepartments}
+                            isDisabled={isLoading || !data?.data?.departments?.length}
+                        >
+                            Export
+                        </Button>
                         <Button
                             size='sm'
                             color='warning'
