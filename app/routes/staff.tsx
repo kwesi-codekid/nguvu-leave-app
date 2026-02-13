@@ -73,6 +73,7 @@ import { GenderChip } from "~/ui/components/chips"
 import { StaffAvatar } from "~/ui/components/avatars"
 import { MobileList } from "~/ui/components/lists"
 import { exportData, formatters, ExportFormat } from "~/ui/lib/export-utils"
+import { ProfileImageUpload } from "~/ui/components/profile-image-upload"
 
 // Permission options
 const PERMISSION_OPTIONS = [
@@ -762,42 +763,12 @@ export default function Staff() {
                                             "border-zinc-200 dark:border-zinc-800",
                                     }}
                                 />
-                                <div className='flex flex-col gap-2'>
-                                    <label className='text-sm font-medium text-foreground-600'>
-                                        Profile Image (Optional)
-                                    </label>
-                                    <input
-                                        type='file'
-                                        accept='image/*'
-                                        onChange={(e) => {
-                                            const file = e.target.files?.[0]
-                                            if (file) {
-                                                // For now, just store the file info
-                                                // In a real implementation, you'd upload to cloud storage
-                                                setFormData({
-                                                    ...formData,
-                                                    profileImage: {
-                                                        url: URL.createObjectURL(file),
-                                                        publicId: file.name,
-                                                        filename: file.name,
-                                                        fileType: file.type,
-                                                        uploadedAt: new Date(),
-                                                    },
-                                                })
-                                            }
-                                        }}
-                                        className='block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer'
-                                    />
-                                    {formData.profileImage && (
-                                        <div className='mt-2'>
-                                            <img
-                                                src={formData.profileImage.url}
-                                                alt='Profile preview'
-                                                className='h-16 w-16 rounded-full object-cover'
-                                            />
-                                        </div>
-                                    )}
-                                </div>
+                                <ProfileImageUpload
+                                    value={formData.profileImage}
+                                    onChange={(image: any) => setFormData({ ...formData, profileImage: image })}
+                                    name={formData.name}
+                                    className="mt-2"
+                                />
                                 <Input
                                     label='Phone Number'
                                     variant='bordered'
@@ -1264,40 +1235,12 @@ export default function Staff() {
                                             "border-zinc-200 dark:border-zinc-800",
                                     }}
                                 />
-                                <div className='flex flex-col gap-2'>
-                                    <label className='text-sm font-medium text-foreground-600'>
-                                        Profile Image (Optional)
-                                    </label>
-                                    <input
-                                        type='file'
-                                        accept='image/*'
-                                        onChange={(e) => {
-                                            const file = e.target.files?.[0]
-                                            if (file) {
-                                                setEditFormData({
-                                                    ...editFormData,
-                                                    profileImage: {
-                                                        url: URL.createObjectURL(file),
-                                                        publicId: file.name,
-                                                        filename: file.name,
-                                                        fileType: file.type,
-                                                        uploadedAt: new Date(),
-                                                    },
-                                                })
-                                            }
-                                        }}
-                                        className='block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer'
-                                    />
-                                    {editFormData.profileImage && (
-                                        <div className='mt-2'>
-                                            <img
-                                                src={editFormData.profileImage.url}
-                                                alt='Profile preview'
-                                                className='h-16 w-16 rounded-full object-cover'
-                                            />
-                                        </div>
-                                    )}
-                                </div>
+                                <ProfileImageUpload
+                                    value={editFormData.profileImage}
+                                    onChange={(image: any) => setEditFormData({ ...editFormData, profileImage: image })}
+                                    name={editFormData.name}
+                                    className="mt-2"
+                                />
                                 <Input
                                     label='Phone Number'
                                     variant='bordered'

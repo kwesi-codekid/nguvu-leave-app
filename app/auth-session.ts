@@ -35,7 +35,7 @@ const { getSession, commitSession, destroySession } =
             httpOnly: true,
             path: "/",
             sameSite: "lax",
-            secure: true,
+            secure: process.env.NODE_ENV === "production",
             secrets: [session_secret],
         },
     })
