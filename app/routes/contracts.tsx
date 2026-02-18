@@ -106,9 +106,10 @@ export default function StaffContracts() {
         fetcher(sessionData?.token as string)
     )
 
-    // Fetch staff for dropdown
+    // Fetch staff for dropdown (server-side search)
+    const [staffSearch, setStaffSearch] = useState("")
     const { data: staffData } = useSWR(
-        `${baseUrl}/staff`,
+        `${baseUrl}/staff?search=${staffSearch}`,
         fetcher(sessionData?.token as string)
     )
 
@@ -168,14 +169,6 @@ export default function StaffContracts() {
         if (!positionsData?.data?.positions) return []
         return positionsData.data.positions.filter(
             (p: JobPositionInterface) => p.isActive
-        )
-    }
-
-    // Get staff without active contracts
-    const getAvailableStaff = () => {
-        if (!staffData?.data?.staff) return []
-        return staffData.data.staff.filter(
-            (s: StaffInterface) => s.status === "active"
         )
     }
 
@@ -730,7 +723,7 @@ export default function StaffContracts() {
                                     label='Staff Member'
                                     variant='bordered'
                                     labelPlacement='outside'
-                                    placeholder='Select a staff member'
+                                    placeholder='Search for a staff member'
                                     isRequired
                                     selectedKey={formData.staff}
                                     onSelectionChange={(key) =>
@@ -739,11 +732,14 @@ export default function StaffContracts() {
                                             staff: key as string,
                                         })
                                     }
+                                    onInputChange={(value) => setStaffSearch(value)}
+                                    inputValue={staffSearch}
+                                    items={staffData?.data?.staff || []}
                                     classNames={{
                                         base: "w-full",
                                     }}
                                 >
-                                    {getAvailableStaff().map((staff: StaffInterface) => (
+                                    {(staff: StaffInterface) => (
                                         <AutocompleteItem
                                             key={staff._id!}
                                             textValue={staff.name}
@@ -764,7 +760,7 @@ export default function StaffContracts() {
                                                 </div>
                                             </div>
                                         </AutocompleteItem>
-                                    ))}
+                                    )}
                                 </Autocomplete>
 
                                 <Autocomplete
