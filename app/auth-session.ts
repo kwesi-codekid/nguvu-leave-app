@@ -9,7 +9,7 @@ interface AuthSessionInterface {
         email?: string
         phone: string
         name: string
-        department: string
+        department: string // Department ID
         permissions: string[]
         profilePicture?: string
         jobTitle?: string
@@ -35,7 +35,7 @@ const { getSession, commitSession, destroySession } =
             httpOnly: true,
             path: "/",
             sameSite: "lax",
-            secure: true,
+            secure: process.env.NODE_ENV === "production",
             secrets: [session_secret],
         },
     })

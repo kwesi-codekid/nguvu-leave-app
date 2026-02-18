@@ -322,10 +322,11 @@ export interface LeaveRequestInterface {
     workingDaysBreakdown?: WorkingDaysBreakdown // Days per year for cross-year leaves
     status: LeaveStatus
     reason?: string
-    attachments?: DocumentAttachment[] // Required for some leave types
+    attachments?: DocumentAttachment[]
     endorsement?: EndorsementRecord
     approval?: ApprovalRecord
     cancellation?: CancellationRecord
+    delegatedBy?: string // Staff ID who requested on behalf
     createdBy?: string
     createdAt?: Date
     updatedAt?: Date

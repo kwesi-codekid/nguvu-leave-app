@@ -53,7 +53,7 @@ export function AuthUserDropdown({
                                 className: "bg-warning/70 text-white text-base",
                             }}
                             className='transition-transform'
-                            description={user?.department}
+                          
                             name={user?.name}
                             classNames={{
                                 name: "font-medium hidden lg:inline-block text-xs",

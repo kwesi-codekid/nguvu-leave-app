@@ -79,7 +79,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 email: response.data?.data?.staff.email,
                 phone: response.data?.data?.staff.phone,
                 name: response.data?.data?.staff.name,
-                department: response.data?.data?.staff.department?.name,
+                department: response.data?.data?.staff.department?._id || response.data?.data?.staff.department,
                 permissions: response.data?.data?.staff.permissions,
                 profilePicture: response.data?.data?.staff.profileImage?.url,
                 gender: response.data?.data?.staff.gender,

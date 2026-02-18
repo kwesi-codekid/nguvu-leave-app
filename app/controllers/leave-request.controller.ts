@@ -60,7 +60,7 @@ export class LeaveRequestController {
         }
 
         try {
-            const { leaveType, startDate, endDate, numberOfDays, reason, attachments } =
+            const { leaveType, startDate, endDate, numberOfDays, reason, attachments, delegateForStaffId } =
                 req.body
             const user = (req as any).user
 
@@ -225,8 +225,32 @@ export class LeaveRequestController {
                 )
             }
 
-            // Get staff details
-            const staffQuery = Staff.findById(user._id)
+            // Determine target staff ID (for delegation or self)
+            const targetStaffId = delegateForStaffId || user._id
+
+            // If delegating, verify the current user has DELEGATE permission
+            if (delegateForStaffId) {
+                const delegator = await Staff.findById(user._id)
+                if (!delegator || !delegator.permissions?.includes("DELEGATE")) {
+                    if (session) await session.abortTransaction()
+                    return errorResponseObject("You do not have delegation permission")
+                }
+                // Verify the target staff is in the same department
+                const targetStaff = await Staff.findById(delegateForStaffId)
+                if (!targetStaff) {
+                    if (session) await session.abortTransaction()
+                    return errorResponseObject("Target staff member not found")
+                }
+                const delegatorDept = delegator.department?.toString()
+                const targetDept = targetStaff.department?.toString()
+                if (delegatorDept !== targetDept) {
+                    if (session) await session.abortTransaction()
+                    return errorResponseObject("You can only delegate for staff in your own department")
+                }
+            }
+
+            // Get staff details (target staff for delegation, or self)
+            const staffQuery = Staff.findById(targetStaffId)
             const staff = session ? await staffQuery.session(session) : await staffQuery
             if (!staff) {
                 if (session) await session.abortTransaction()
@@ -240,9 +264,9 @@ export class LeaveRequestController {
                 )
             }
 
-            // Check for active contract
+            // Check for active contract (of the target staff)
             const contractQuery = StaffContract.findOne({
-                staff: user._id,
+                staff: targetStaffId,
                 status: ContractStatus.ACTIVE,
             }).populate("position")
             const activeContract = session ? await contractQuery.session(session) : await contractQuery
@@ -307,12 +331,12 @@ export class LeaveRequestController {
                 )
             }
 
-            // Check leave balance (period-based lookup)
+            // Check leave balance (period-based lookup) for the target staff
             const leaveStartDate = new Date(startDate)
-            console.log(`[LeaveRequest] Looking for balance for staff: ${user._id}, leaveType: ${leaveType}, date: ${leaveStartDate}`)
-            
+            console.log(`[LeaveRequest] Looking for balance for staff: ${targetStaffId}, leaveType: ${leaveType}, date: ${leaveStartDate}`)
+
             const balanceQuery = LeaveBalance.findOne({
-                staff: user._id,
+                staff: targetStaffId,
                 leaveType,
                 periodStart: { $lte: leaveStartDate },
                 periodEnd: { $gte: leaveStartDate },
@@ -322,7 +346,7 @@ export class LeaveRequestController {
             console.log(`[LeaveRequest] Balance found:`, balance)
 
             if (!balance) {
-                console.error(`[LeaveRequest] No balance found for staff: ${user._id}, leaveType: ${leaveType}`)
+                console.error(`[LeaveRequest] No balance found for staff: ${targetStaffId}, leaveType: ${leaveType}`)
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
                     `No ${leaveType} balance found for the current leave period`
@@ -341,10 +365,10 @@ export class LeaveRequestController {
                 )
             }
 
-            // Check for overlapping requests
+            // Check for overlapping requests for the target staff
             console.log(`[LeaveRequest] Checking for overlapping requests...`)
             const overlapping = await LeaveRequest.getOverlappingRequests(
-                user._id,
+                targetStaffId,
                 new Date(startDate),
                 new Date(actualEndDate)
             )
@@ -383,7 +407,7 @@ export class LeaveRequestController {
 
             // Create leave request
             const leaveRequestData: any = {
-                staff: user._id,
+                staff: targetStaffId,
                 contract: activeContract._id,
                 position: position._id,
                 department: department._id,
@@ -404,6 +428,11 @@ export class LeaveRequestController {
                     endDateComputed: computedEndDate,
                     requestedDays: numberOfDays || null,
                 }
+            }
+
+            // Set delegatedBy if this is a delegated request
+            if (delegateForStaffId) {
+                leaveRequestData.delegatedBy = user._id
             }
 
             // Set approval chain
@@ -1846,8 +1875,11 @@ export class LeaveRequestController {
             const limitNum = Math.min(100, Math.max(1, Number(limit)))
             const skip = (pageNum - 1) * limitNum
 
-            // Build query
-            const query: any = { staff: user._id }
+            // Build query - exclude delegated requests (only show requests made by the user themselves)
+            const query: any = { 
+                staff: user._id,
+                delegatedBy: { $exists: false } // Exclude delegated requests
+            }
 
             if (year) {
                 query.startYear = Number(year)
@@ -1962,6 +1994,432 @@ export class LeaveRequestController {
         } catch (error) {
             console.error("Error fetching my requests:", error)
             return errorResponseObject("Failed to retrieve leave requests")
+        }
+    }
+
+    /**
+     * Get delegated requests
+     * GET /api/leave-requests/delegated-requests
+     */
+    static async getDelegatedRequests(req: Request): Promise<ResponseObject> {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                year,
+                status,
+                leaveType,
+                sortBy = "createdAt",
+                sortOrder = "desc",
+            } = req.query
+            const user = (req as any).user
+
+            // Pagination
+            const pageNum = Math.max(1, Number(page))
+            const limitNum = Math.min(100, Math.max(1, Number(limit)))
+            const skip = (pageNum - 1) * limitNum
+
+            // Build query - get requests made by this user on behalf of others OR requests made for this user by others
+            const query: any = { 
+                $or: [
+                    { delegatedBy: user._id }, // Requests made by this user for others
+                    { staff: user._id, delegatedBy: { $exists: true } } // Requests made for this user by others
+                ]
+            }
+
+            if (year) {
+                query.startYear = Number(year)
+            }
+
+            if (
+                status &&
+                Object.values(LeaveStatus).includes(status as LeaveStatus)
+            ) {
+                query.status = status
+            }
+
+            if (
+                leaveType &&
+                Object.values(LeaveTypes).includes(leaveType as LeaveTypes)
+            ) {
+                query.leaveType = leaveType
+            }
+
+            // Sorting
+            const sortOptions: any = {}
+            const validSortFields = [
+                "createdAt",
+                "startDate",
+                "endDate",
+                "workingDays",
+                "status",
+            ]
+            const sortField = validSortFields.includes(sortBy as string)
+                ? sortBy
+                : "createdAt"
+            sortOptions[sortField as string] = sortOrder === "asc" ? 1 : -1
+
+            // Execute query
+            const [requests, totalCount] = await Promise.all([
+                LeaveRequest.find(query)
+                    .populate("position", "title")
+                    .populate("department", "name")
+                    .populate("staff", "name staffId") // The person the leave is for
+                    .populate("delegatedBy", "name staffId") // The person who made the request
+                    .populate("endorsement.byStaff", "name")
+                    .populate("approval.byStaff", "name")
+                    .sort(sortOptions)
+                    .skip(skip)
+                    .limit(limitNum)
+                    .lean(),
+                LeaveRequest.countDocuments(query),
+            ])
+
+            // Add computed fields
+            const enhancedRequests = requests.map((request) => ({
+                ...request,
+                daysUntilStart:
+                    request.status === LeaveStatus.APPROVED
+                        ? Math.max(
+                              0,
+                              Math.ceil(
+                                  (new Date(request.startDate).getTime() -
+                                      Date.now()) /
+                                      (1000 * 60 * 60 * 24)
+                              )
+                          )
+                        : null,
+                isStarted:
+                    request.status === LeaveStatus.APPROVED &&
+                    new Date(request.startDate) <= new Date(),
+                canCancel:
+                    request.status === LeaveStatus.APPROVED &&
+                    new Date(request.startDate) > new Date(),
+                canWithdraw: [
+                    LeaveStatus.PENDING,
+                    LeaveStatus.ENDORSED,
+                ].includes(request.status),
+            }))
+
+            // Summary statistics
+            const summary = {
+                total: totalCount,
+                pending: requests.filter(
+                    (r) => r.status === LeaveStatus.PENDING
+                ).length,
+                endorsed: requests.filter(
+                    (r) => r.status === LeaveStatus.ENDORSED
+                ).length,
+                approved: requests.filter(
+                    (r) => r.status === LeaveStatus.APPROVED
+                ).length,
+                rejected: requests.filter(
+                    (r) => r.status === LeaveStatus.REJECTED
+                ).length,
+                cancelled: requests.filter(
+                    (r) => r.status === LeaveStatus.CANCELLED
+                ).length,
+                withdrawn: requests.filter(
+                    (r) => r.status === LeaveStatus.WITHDRAWN
+                ).length,
+            }
+
+            return successResponseObject(
+                "Delegated leave requests retrieved successfully",
+                {
+                    requests: enhancedRequests,
+                    summary,
+                    pagination: {
+                        currentPage: pageNum,
+                        totalPages: Math.ceil(totalCount / limitNum),
+                        totalRecords: totalCount,
+                        recordsPerPage: limitNum,
+                        hasNext: skip + limitNum < totalCount,
+                        hasPrev: pageNum > 1,
+                    },
+                }
+            )
+        } catch (error) {
+            console.error("Error fetching delegated requests:", error)
+            return errorResponseObject("Failed to retrieve delegated leave requests")
+        }
+    }
+
+    /**
+     * Get my endorsed requests
+     * GET /api/leave-requests/my-endorsed
+     */
+    static async getMyEndorsedRequests(req: Request): Promise<ResponseObject> {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                year,
+                status,
+                leaveType,
+                sortBy = "createdAt",
+                sortOrder = "desc",
+            } = req.query
+            const user = (req as any).user
+
+            // Pagination
+            const pageNum = Math.max(1, Number(page))
+            const limitNum = Math.min(100, Math.max(1, Number(limit)))
+            const skip = (pageNum - 1) * limitNum
+
+            // Build query - get requests endorsed by this user
+            const query: any = { 
+                "endorsement.byStaff": user._id
+            }
+
+            if (year) {
+                query.startYear = Number(year)
+            }
+
+            if (
+                status &&
+                Object.values(LeaveStatus).includes(status as LeaveStatus)
+            ) {
+                query.status = status
+            }
+
+            if (
+                leaveType &&
+                Object.values(LeaveTypes).includes(leaveType as LeaveTypes)
+            ) {
+                query.leaveType = leaveType
+            }
+
+            // Sorting
+            const sortOptions: any = {}
+            const validSortFields = [
+                "createdAt",
+                "startDate",
+                "endDate",
+                "workingDays",
+                "status",
+                "endorsement.at",
+            ]
+            const sortField = validSortFields.includes(sortBy as string)
+                ? sortBy
+                : "endorsement.at"
+            sortOptions[sortField as string] = sortOrder === "asc" ? 1 : -1
+
+            // Execute query
+            const [requests, totalCount] = await Promise.all([
+                LeaveRequest.find(query)
+                    .populate("position", "title")
+                    .populate("department", "name")
+                    .populate("staff", "name staffId")
+                    .populate("endorsement.byStaff", "name")
+                    .populate("approval.byStaff", "name")
+                    .sort(sortOptions)
+                    .skip(skip)
+                    .limit(limitNum)
+                    .lean(),
+                LeaveRequest.countDocuments(query),
+            ])
+
+            // Add computed fields
+            const enhancedRequests = requests.map((request) => ({
+                ...request,
+                endorsedAt: request.endorsement?.at,
+                daysUntilStart:
+                    request.status === LeaveStatus.APPROVED
+                        ? Math.max(
+                              0,
+                              Math.ceil(
+                                  (new Date(request.startDate).getTime() -
+                                      Date.now()) /
+                                      (1000 * 60 * 60 * 24)
+                              )
+                          )
+                        : null,
+                isStarted:
+                    request.status === LeaveStatus.APPROVED &&
+                    new Date(request.startDate) <= new Date(),
+            }))
+
+            // Summary statistics
+            const summary = {
+                total: totalCount,
+                pending: requests.filter(
+                    (r) => r.status === LeaveStatus.PENDING
+                ).length,
+                endorsed: requests.filter(
+                    (r) => r.status === LeaveStatus.ENDORSED
+                ).length,
+                approved: requests.filter(
+                    (r) => r.status === LeaveStatus.APPROVED
+                ).length,
+                rejected: requests.filter(
+                    (r) => r.status === LeaveStatus.REJECTED
+                ).length,
+                cancelled: requests.filter(
+                    (r) => r.status === LeaveStatus.CANCELLED
+                ).length,
+                withdrawn: requests.filter(
+                    (r) => r.status === LeaveStatus.WITHDRAWN
+                ).length,
+            }
+
+            return successResponseObject(
+                "Endorsed requests retrieved successfully",
+                {
+                    requests: enhancedRequests,
+                    summary,
+                    pagination: {
+                        currentPage: pageNum,
+                        totalPages: Math.ceil(totalCount / limitNum),
+                        totalRecords: totalCount,
+                        recordsPerPage: limitNum,
+                        hasNext: skip + limitNum < totalCount,
+                        hasPrev: pageNum > 1,
+                    },
+                }
+            )
+        } catch (error) {
+            console.error("Error fetching endorsed requests:", error)
+            return errorResponseObject("Failed to retrieve endorsed requests")
+        }
+    }
+
+    /**
+     * Get my approved requests
+     * GET /api/leave-requests/my-approved
+     */
+    static async getMyApprovedRequests(req: Request): Promise<ResponseObject> {
+        try {
+            const {
+                page = 1,
+                limit = 20,
+                year,
+                status,
+                leaveType,
+                sortBy = "createdAt",
+                sortOrder = "desc",
+            } = req.query
+            const user = (req as any).user
+
+            // Pagination
+            const pageNum = Math.max(1, Number(page))
+            const limitNum = Math.min(100, Math.max(1, Number(limit)))
+            const skip = (pageNum - 1) * limitNum
+
+            // Build query - get requests approved by this user
+            const query: any = { 
+                "approval.byStaff": user._id
+            }
+
+            if (year) {
+                query.startYear = Number(year)
+            }
+
+            if (
+                status &&
+                Object.values(LeaveStatus).includes(status as LeaveStatus)
+            ) {
+                query.status = status
+            }
+
+            if (
+                leaveType &&
+                Object.values(LeaveTypes).includes(leaveType as LeaveTypes)
+            ) {
+                query.leaveType = leaveType
+            }
+
+            // Sorting
+            const sortOptions: any = {}
+            const validSortFields = [
+                "createdAt",
+                "startDate",
+                "endDate",
+                "workingDays",
+                "status",
+                "approval.at",
+            ]
+            const sortField = validSortFields.includes(sortBy as string)
+                ? sortBy
+                : "approval.at"
+            sortOptions[sortField as string] = sortOrder === "asc" ? 1 : -1
+
+            // Execute query
+            const [requests, totalCount] = await Promise.all([
+                LeaveRequest.find(query)
+                    .populate("position", "title")
+                    .populate("department", "name")
+                    .populate("staff", "name staffId")
+                    .populate("endorsement.byStaff", "name")
+                    .populate("approval.byStaff", "name")
+                    .sort(sortOptions)
+                    .skip(skip)
+                    .limit(limitNum)
+                    .lean(),
+                LeaveRequest.countDocuments(query),
+            ])
+
+            // Add computed fields
+            const enhancedRequests = requests.map((request) => ({
+                ...request,
+                approvedAt: request.approval?.at,
+                daysUntilStart:
+                    request.status === LeaveStatus.APPROVED
+                        ? Math.max(
+                              0,
+                              Math.ceil(
+                                  (new Date(request.startDate).getTime() -
+                                      Date.now()) /
+                                      (1000 * 60 * 60 * 24)
+                              )
+                          )
+                        : null,
+                isStarted:
+                    request.status === LeaveStatus.APPROVED &&
+                    new Date(request.startDate) <= new Date(),
+            }))
+
+            // Summary statistics
+            const summary = {
+                total: totalCount,
+                pending: requests.filter(
+                    (r) => r.status === LeaveStatus.PENDING
+                ).length,
+                endorsed: requests.filter(
+                    (r) => r.status === LeaveStatus.ENDORSED
+                ).length,
+                approved: requests.filter(
+                    (r) => r.status === LeaveStatus.APPROVED
+                ).length,
+                rejected: requests.filter(
+                    (r) => r.status === LeaveStatus.REJECTED
+                ).length,
+                cancelled: requests.filter(
+                    (r) => r.status === LeaveStatus.CANCELLED
+                ).length,
+                withdrawn: requests.filter(
+                    (r) => r.status === LeaveStatus.WITHDRAWN
+                ).length,
+            }
+
+            return successResponseObject(
+                "Approved requests retrieved successfully",
+                {
+                    requests: enhancedRequests,
+                    summary,
+                    pagination: {
+                        currentPage: pageNum,
+                        totalPages: Math.ceil(totalCount / limitNum),
+                        totalRecords: totalCount,
+                        recordsPerPage: limitNum,
+                        hasNext: skip + limitNum < totalCount,
+                        hasPrev: pageNum > 1,
+                    },
+                }
+            )
+        } catch (error) {
+            console.error("Error fetching approved requests:", error)
+            return errorResponseObject("Failed to retrieve approved requests")
         }
     }
 
@@ -3175,8 +3633,8 @@ export class LeaveRequestController {
                 ],
             }
 
-            // Filter by department if specified (and user is not HR/Admin)
-            if (department && !user?.permissions?.includes("HR") && !user?.permissions?.includes("ADMIN")) {
+            // Filter by department if specified
+            if (department && department !== "all") {
                 // Get staff in the specified department
                 const staffInDept = await Staff.find({ department }).select("_id")
                 const staffIds = staffInDept.map(s => s._id)

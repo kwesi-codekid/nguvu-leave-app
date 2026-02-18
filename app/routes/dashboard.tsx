@@ -149,6 +149,7 @@ function KPICard({
     icon: Icon,
     trend,
     color = "default",
+    href,
 }: {
     className?: string
     title: string
@@ -157,6 +158,7 @@ function KPICard({
     icon: any
     trend?: { value: number; label: string }
     color?: "default" | "primary" | "success" | "warning" | "danger"
+    href?: string
 }) {
     const colorClasses = {
         default: "bg-danger-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400",
@@ -173,8 +175,8 @@ function KPICard({
         danger: "bg-danger-100 dark:bg-gradient-to-br from-danger/70 to-danger/80",
     }
 
-    return (
-        <Card  className={`${cardBgColors[color]} hover:scale-[1.01] transition-all duration-300 border border-black/10 dark:border-white/20 shadow-none`}>
+    const card = (
+        <Card  className={`${cardBgColors[color]} hover:scale-[1.01] transition-all duration-300 border border-black/10 dark:border-white/20 shadow-none ${href ? "cursor-pointer" : ""}`}>
             <CardBody className="p-4">
                 <div className="flex items-start justify-between">
                     <div className="flex-1">
@@ -200,6 +202,12 @@ function KPICard({
             </CardBody>
         </Card>
     )
+
+    if (href) {
+        return <Link to={href}>{card}</Link>
+    }
+
+    return card
 }
 
 // Custom tooltip for charts
@@ -241,6 +249,7 @@ function HRDashboard({ data }: { data: any }) {
                     subtitle={`${kpis.activeStaff} active`}
                     icon={Users}
                     color="primary"
+                    href="/staff"
                 />
                 <KPICard
                     title="On Leave Today"
@@ -248,6 +257,7 @@ function HRDashboard({ data }: { data: any }) {
                     subtitle="Staff members"
                     icon={CalendarDays}
                     color="warning"
+                    href="/leave-calendar"
                 />
                 <KPICard
                     title="Pending Actions"
@@ -255,6 +265,7 @@ function HRDashboard({ data }: { data: any }) {
                     subtitle={`${kpis.pendingEndorsements} endorsements, ${kpis.pendingApprovals} approvals`}
                     icon={Clock}
                     color={kpis.pendingEndorsements + kpis.pendingApprovals > 10 ? "danger" : "default"}
+                    href="/leave-requests?tab=pending-endorsements"
                 />
                 <KPICard
                     title="Approval Rate"
@@ -262,6 +273,7 @@ function HRDashboard({ data }: { data: any }) {
                     subtitle="Last 30 days"
                     icon={CheckCircle}
                     color="success"
+                    href="/reports?tab=utilization"
                 />
             </div>
 
@@ -490,42 +502,50 @@ function HRDashboard({ data }: { data: any }) {
 
             {/* Quick Stats Row */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <Card className="bg-primary/70 dark:bg-primary/70 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20">
-                    <CardBody className="p-4">
-                        <p className="text-sm opacity-80">Utilization Rate</p>
-                        <p className="text-3xl font-bold">{quickStats.utilizationRate}%</p>
-                        <Progress
-                            value={quickStats.utilizationRate}
-                            className="mt-2"
-                            classNames={{
-                                indicator: "bg-white",
-                                track: "bg-white/30",
-                            }}
-                            size="sm"
-                        />
-                    </CardBody>
-                </Card>
-                <Card className="bg-success/70 dark:bg-success/70 text-white border border-black/20 dark:border-white/20">
-                    <CardBody className="p-4">
-                        <p className="text-sm opacity-80">Avg Leave/Staff</p>
-                        <p className="text-3xl font-bold">{quickStats.averageLeavePerStaff}</p>
-                        <p className="text-xs opacity-80 mt-1">requests per staff YTD</p>
-                    </CardBody>
-                </Card>
-                <Card className="bg-warning/70 dark:bg-warning/70 text-white border border-black/20 dark:border-white/20">
-                    <CardBody className="p-4">
-                        <p className="text-sm opacity-80">Call-Ins (30 days)</p>
-                        <p className="text-3xl font-bold">{callIns.count}</p>
-                        <p className="text-xs opacity-80 mt-1">{callIns.daysRecovered} days recovered</p>
-                    </CardBody>
-                </Card>
-                <Card className="bg-gradient-to-br from-zinc-700 to-zinc-800 text-white border border-black/20 dark:border-white/20">
-                    <CardBody className="p-4">
-                        <p className="text-sm opacity-80">Active Staff</p>
-                        <p className="text-3xl font-bold">{kpis.activeStaff}</p>
-                        <p className="text-xs opacity-80 mt-1">of {kpis.totalStaff} total</p>
-                    </CardBody>
-                </Card>
+                <Link to="/reports?tab=utilization">
+                    <Card className="bg-primary/70 dark:bg-primary/70 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 cursor-pointer">
+                        <CardBody className="p-4">
+                            <p className="text-sm opacity-80">Utilization Rate</p>
+                            <p className="text-3xl font-bold">{quickStats.utilizationRate}%</p>
+                            <Progress
+                                value={quickStats.utilizationRate}
+                                className="mt-2"
+                                classNames={{
+                                    indicator: "bg-white",
+                                    track: "bg-white/30",
+                                }}
+                                size="sm"
+                            />
+                        </CardBody>
+                    </Card>
+                </Link>
+                <Link to="/reports?tab=leave-requests">
+                    <Card className="bg-success/70 dark:bg-success/70 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 cursor-pointer">
+                        <CardBody className="p-4">
+                            <p className="text-sm opacity-80">Avg Leave/Staff</p>
+                            <p className="text-3xl font-bold">{quickStats.averageLeavePerStaff}</p>
+                            <p className="text-xs opacity-80 mt-1">requests per staff YTD</p>
+                        </CardBody>
+                    </Card>
+                </Link>
+                <Link to="/call-ins">
+                    <Card className="bg-warning/70 dark:bg-warning/70 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 cursor-pointer">
+                        <CardBody className="p-4">
+                            <p className="text-sm opacity-80">Call-Ins (30 days)</p>
+                            <p className="text-3xl font-bold">{callIns.count}</p>
+                            <p className="text-xs opacity-80 mt-1">{callIns.daysRecovered} days recovered</p>
+                        </CardBody>
+                    </Card>
+                </Link>
+                <Link to="/leave-requests?tab=delegated-requests">
+                    <Card className="bg-gradient-to-br from-zinc-700 to-zinc-800 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 cursor-pointer">
+                        <CardBody className="p-4">
+                            <p className="text-sm opacity-80">Delegated Requests</p>
+                            <p className="text-3xl font-bold">{quickStats.delegatedRequests || 0}</p>
+                            <p className="text-xs opacity-80 mt-1">this year</p>
+                        </CardBody>
+                    </Card>
+                </Link>
             </div>
         </div>
     )
@@ -582,13 +602,15 @@ function ManagerDashboard({ data }: { data: any }) {
                     subtitle="Team members"
                     icon={CalendarDays}
                     color="warning"
+                    href="/leave-calendar"
                 />
                 <KPICard
                     title="Pending Actions"
                     value={(kpis?.pendingEndorsements || 0) + (kpis?.pendingApprovals || 0)}
-                    subtitle={`${kpis?.pendingEndorsements || 0} endorsements, ${kpis?.pendingApprovals || 0} approvals`}
+                    subtitle={`${kpis?.pendingEndorsements || 0} endorsements,`}
                     icon={Clock}
                     color={(kpis?.pendingEndorsements || 0) + (kpis?.pendingApprovals || 0) > 5 ? "danger" : "default"}
+                    href="/leave-requests?tab=pending-endorsements"
                 />
                 <KPICard
                     title="Approval Rate"
@@ -596,6 +618,7 @@ function ManagerDashboard({ data }: { data: any }) {
                     subtitle="This year"
                     icon={CheckCircle}
                     color="success"
+                    href="/reports?tab=utilization"
                 />
             </div>
 
@@ -836,34 +859,42 @@ function ManagerDashboard({ data }: { data: any }) {
 
             {/* Quick Stats Row */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <Card className="bg-primary/70 text-white border border-black/20 dark:border-white/20">
-                    <CardBody className="p-4">
-                        <p className="text-sm opacity-80">Team Size</p>
-                        <p className="text-3xl font-bold">{kpis?.teamSize || 0}</p>
-                        <p className="text-xs opacity-80 mt-1">active members</p>
-                    </CardBody>
-                </Card>
-                <Card className="bg-warning/70 text-white border border-black/20 dark:border-white/20">
-                    <CardBody className="p-4">
-                        <p className="text-sm opacity-80">Pending Actions</p>
-                        <p className="text-3xl font-bold">{quickActions?.pendingActions || 0}</p>
-                        <p className="text-xs opacity-80 mt-1">need your attention</p>
-                    </CardBody>
-                </Card>
-                <Card className="bg-success/70 text-white border border-black/20 dark:border-white/20">
-                    <CardBody className="p-4">
-                        <p className="text-sm opacity-80">Upcoming Leaves</p>
-                        <p className="text-3xl font-bold">{quickActions?.upcomingLeaves || 0}</p>
-                        <p className="text-xs opacity-80 mt-1">next 14 days</p>
-                    </CardBody>
-                </Card>
-                <Card className="bg-gradient-to-br from-zinc-700 to-zinc-800 text-white border border-black/20 dark:border-white/20">
-                    <CardBody className="p-4">
-                        <p className="text-sm opacity-80">Avg Approval Time</p>
-                        <p className="text-3xl font-bold">{kpis?.avgApprovalTime || "N/A"}</p>
-                        <p className="text-xs opacity-80 mt-1">last 30 days</p>
-                    </CardBody>
-                </Card>
+                <Link to="/staff">
+                    <Card className="bg-primary/70 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 cursor-pointer">
+                        <CardBody className="p-4">
+                            <p className="text-sm opacity-80">Team Size</p>
+                            <p className="text-3xl font-bold">{kpis?.teamSize || 0}</p>
+                            <p className="text-xs opacity-80 mt-1">active members</p>
+                        </CardBody>
+                    </Card>
+                </Link>
+                <Link to="/leave-requests?tab=pending-endorsements">
+                    <Card className="bg-warning/70 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 cursor-pointer">
+                        <CardBody className="p-4">
+                            <p className="text-sm opacity-80">Pending Actions</p>
+                            <p className="text-3xl font-bold">{quickActions?.pendingActions || 0}</p>
+                            <p className="text-xs opacity-80 mt-1">need your attention</p>
+                        </CardBody>
+                    </Card>
+                </Link>
+                <Link to="/leave-calendar">
+                    <Card className="bg-success/70 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 cursor-pointer">
+                        <CardBody className="p-4">
+                            <p className="text-sm opacity-80">Upcoming Leaves</p>
+                            <p className="text-3xl font-bold">{quickActions?.upcomingLeaves || 0}</p>
+                            <p className="text-xs opacity-80 mt-1">next 14 days</p>
+                        </CardBody>
+                    </Card>
+                </Link>
+                <Link to="/leave-requests?tab=delegated-requests">
+                    <Card className="bg-gradient-to-br from-zinc-700 to-zinc-800 text-white hover:scale-[1.01] transition-all duration-300 border border-black/20 dark:border-white/20 cursor-pointer">
+                        <CardBody className="p-4">
+                            <p className="text-sm opacity-80">Delegated Requests</p>
+                            <p className="text-3xl font-bold">{quickActions?.delegatedRequests || 0}</p>
+                            <p className="text-xs opacity-80 mt-1">this year</p>
+                        </CardBody>
+                    </Card>
+                </Link>
             </div>
         </div>
     )
@@ -914,6 +945,7 @@ function StaffDashboard({ data }: { data: any }) {
                     subtitle={`${requestsSummary?.pending || 0} pending, ${requestsSummary?.endorsed || 0} endorsed`}
                     icon={Clock}
                     color={(requestsSummary?.pending || 0) > 0 ? "warning" : "default"}
+                    href="/leave-requests?tab=my-requests"
                 />
                 <KPICard
                     title="Approved This Year"
@@ -921,6 +953,7 @@ function StaffDashboard({ data }: { data: any }) {
                     subtitle={`${requestsSummary?.total || 0} total requests`}
                     icon={CheckCircle}
                     color="success"
+                    href="/leave-requests?tab=my-requests"
                 />
             </div>
 
@@ -962,9 +995,9 @@ function StaffDashboard({ data }: { data: any }) {
                                     <ResponsiveContainer width="100%" height="100%">
                                         <RechartsPieChart>
                                             <Pie
-                                                data={myBalances.filter((b: any) => (b.total || b.used + b.remaining) > 0).map((b: any) => ({
+                                                data={myBalances.filter((b: any) => (b.allocated || b.used + b.remaining) > 0).map((b: any) => ({
                                                     name: b.leaveType.charAt(0).toUpperCase() + b.leaveType.slice(1),
-                                                    value: b.total || (b.used + b.remaining) || 1,
+                                                    value: b.allocated || (b.used + b.remaining) || 1,
                                                     used: b.used || 0,
                                                     remaining: b.remaining || 0,
                                                 }))}
@@ -976,7 +1009,7 @@ function StaffDashboard({ data }: { data: any }) {
                                                 dataKey="value"
                                                 stroke="none"
                                             >
-                                                {myBalances.filter((b: any) => (b.total || b.used + b.remaining) > 0).map((b: any, index: number) => (
+                                                {myBalances.filter((b: any) => (b.allocated || b.used + b.remaining) > 0).map((b: any, index: number) => (
                                                     <Cell key={`cell-${index}`} fill={LEAVE_TYPE_COLORS[b.leaveType] || "#6B7280"} />
                                                 ))}
                                             </Pie>
@@ -1035,7 +1068,7 @@ function StaffDashboard({ data }: { data: any }) {
                                                 type: b.leaveType.charAt(0).toUpperCase() + b.leaveType.slice(1),
                                                 used: b.used || 0,
                                                 remaining: b.remaining || 0,
-                                                total: b.total || (b.used + b.remaining) || 0,
+                                                total: b.allocated || (b.used + b.remaining) || 0,
                                             }))}
                                         >
                                             <defs>
@@ -1087,7 +1120,7 @@ function StaffDashboard({ data }: { data: any }) {
                                     </div>
                                     <div className="text-center">
                                         <p className="text-xl font-bold text-primary">
-                                            {myBalances.reduce((sum: number, b: any) => sum + (b.total || b.used + b.remaining || 0), 0)}
+                                            {myBalances.reduce((sum: number, b: any) => sum + (b.allocated || b.used + b.remaining || 0), 0)}
                                         </p>
                                         <p className="text-xs text-zinc-500">Total Allocated</p>
                                     </div>
