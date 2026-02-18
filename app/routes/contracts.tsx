@@ -47,6 +47,7 @@ import {
     User,
     Users,
     XCircle,
+    Download,
 } from "lucide-react"
 import useSWR from "swr"
 import { isAuthenticated, getSessionData } from "~/auth-session"
@@ -56,6 +57,7 @@ import { SearchInput } from "~/ui/components/inputs"
 import AppLayout from "~/ui/layouts/app-layout"
 import { fetcher } from "~/ui/lib/fetcher"
 import { DateTime } from "luxon"
+import { exportData, formatters, ExportFormat } from "~/ui/lib/export-utils"
 import { DepartmentStatsCard } from "~/ui/components/cards"
 import { MobileList } from "~/ui/components/lists"
 import {
@@ -126,7 +128,8 @@ export default function StaffContracts() {
     const terminateDisclosure = useDisclosure()
 
     // Selected contract for view/edit/delete
-    const [selectedContract, setSelectedContract] = useState<any | null>(null)
+    const [selectedContract, setSelectedContract] = useState<StaffContractInterface | null>(null)
+    const [selectedExportFormat, setSelectedExportFormat] = useState<ExportFormat>("csv")
 
     // Form state for create
     const [formData, setFormData] = useState({
@@ -434,6 +437,43 @@ export default function StaffContracts() {
         }
     }
 
+    // Handle export contracts data
+    const handleExportContracts = () => {
+        if (!data?.data?.contracts || data.data.contracts.length === 0) {
+            addToast({
+                color: "warning",
+                title: "No Data",
+                description: "No contract data available to export",
+            })
+            return
+        }
+
+        const exportColumns = [
+            { key: "staff.name", label: "Staff Name", formatter: formatters.staffName },
+            { key: "staff.staffId", label: "Staff ID" },
+            { key: "jobPosition.title", label: "Job Position" },
+            { key: "department.name", label: "Department", formatter: formatters.department },
+            { key: "startDate", label: "Start Date", formatter: formatters.date },
+            { key: "endDate", label: "End Date", formatter: formatters.date },
+            { key: "salary", label: "Salary", formatter: formatters.currency },
+            { key: "currency", label: "Currency" },
+            { key: "status", label: "Status" },
+        ]
+
+        exportData(
+            data.data.contracts,
+            exportColumns,
+            selectedExportFormat,
+            `contracts-export-${DateTime.now().toFormat("yyyy-MM-dd_HH-mm-ss")}`
+        )
+
+        addToast({
+            color: "success",
+            title: "Export Complete",
+            description: `Contract data exported successfully as ${selectedExportFormat.toUpperCase()}`,
+        })
+    }
+
     return (
         <AppLayout user={sessionData.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-8 pb-8'>
@@ -445,13 +485,38 @@ export default function StaffContracts() {
                             View, create and manage staff contracts
                         </p>
                     </div>
-                    <Button
-                        color='warning'
-                        size='sm'
-                        onPress={createDisclosure.onOpen}
-                    >
-                        Add Contract
-                    </Button>
+                    <div className='flex items-center gap-2'>
+                        <Select
+                            size='sm'
+                            radius='sm'
+                            variant='bordered'
+                            className='w-24'
+                            selectedKeys={[selectedExportFormat]}
+                            aria-label='Export Format'
+                            onSelectionChange={(keys) => setSelectedExportFormat(Array.from(keys)[0] as ExportFormat)}
+                        >
+                            <SelectItem key='csv'>CSV</SelectItem>
+                            <SelectItem key='excel'>Excel</SelectItem>
+                            <SelectItem key='pdf'>PDF</SelectItem>
+                        </Select>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            startContent={<Download className='size-4' />}
+                            onPress={handleExportContracts}
+                            isDisabled={isLoading || !data?.data?.contracts?.length}
+                        >
+                            Export
+                        </Button>
+                        <Button
+                            color='warning'
+                            size='sm'
+                            onPress={createDisclosure.onOpen}
+                        >
+                            Add Contract
+                        </Button>
+                    </div>
                 </div>
 
                 {/* stats card */}

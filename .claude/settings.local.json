@@ -6,7 +6,9 @@
       "Bash(npx tsc:*)",
       "Bash(npm install:*)",
       "Bash(grep -r \"GEMINI_API_KEY\" .env*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(npx react-router build:*)",
+      "Bash(npx vite build:*)"
     ]
   }
 }

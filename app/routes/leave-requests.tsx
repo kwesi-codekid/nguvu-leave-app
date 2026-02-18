@@ -1,9 +1,12 @@
 import {
     addToast,
+    Autocomplete,
+    AutocompleteItem,
     Button,
     Card,
     CardBody,
     Chip,
+    DatePicker,
     Divider,
     Drawer,
     DrawerBody,
@@ -16,6 +19,8 @@ import {
     ModalContent,
     ModalFooter,
     ModalHeader,
+    RadioGroup,
+    Radio,
     Select,
     SelectItem,
     Spinner,
@@ -36,6 +41,7 @@ import { DataTable } from "~/ui/components/data-table"
 import useSWR from "swr"
 import { DateTime } from "luxon"
 import { fetcher } from "~/ui/lib/fetcher"
+import * as XLSX from 'xlsx'
 import {
     LeaveRequestInterface,
     LeaveTypes,
@@ -44,6 +50,7 @@ import {
     LEAVE_TYPES_REQUIRING_DOCUMENTS,
     GENDER_RESTRICTED_LEAVES,
     Gender,
+    StaffInterface,
 } from "~/utils/types"
 import {
     CalendarDays,
@@ -57,6 +64,7 @@ import {
     ThumbsUp,
     Undo2,
     User,
+    Users,
     XCircle,
     Building2,
     Briefcase,
@@ -91,6 +99,7 @@ export default function LeaveRequests() {
     const isManager = sessionData?.user?.permissions?.includes("MANAGER")
     const canEndorse = isHrOrAdmin || isManager
     const canApprove = isHrOrAdmin
+    const canDelegate = sessionData?.user?.permissions?.includes("DELEGATE")
 
     // Fetch my requests
     const {
@@ -128,10 +137,72 @@ export default function LeaveRequests() {
         fetcher(sessionData.token as string)
     )
 
+    // Fetch my endorsed requests
+    const {
+        data: myEndorsedData,
+        isLoading: myEndorsedLoading,
+        mutate: mutateMyEndorsed,
+    } = useSWR(
+        currentTab === "my-endorsed" && canEndorse
+            ? `${baseUrl}/leave-requests?op=my-endorsed`
+            : null,
+        fetcher(sessionData.token as string)
+    )
+
+    // Fetch my approved requests
+    const {
+        data: myApprovedData,
+        isLoading: myApprovedLoading,
+        mutate: mutateMyApproved,
+    } = useSWR(
+        currentTab === "my-approved" && canApprove
+            ? `${baseUrl}/leave-requests?op=my-approved`
+            : null,
+        fetcher(sessionData.token as string)
+    )
+
+    // Fetch delegated requests
+    const {
+        data: delegatedRequestsData,
+        isLoading: delegatedRequestsLoading,
+        mutate: mutateDelegatedRequests,
+    } = useSWR(
+        currentTab === "delegated-requests"
+            ? `${baseUrl}/leave-requests?op=delegated-requests`
+            : null,
+        fetcher(sessionData.token as string)
+    )
+
     // Fetch my leave balances
     const { data: balancesData, isLoading: balancesLoading } = useSWR(
         `${baseUrl}/leave-balances?op=by-staff&staffId=${sessionData?.user?._id}`,
         fetcher(sessionData.token as string)
+    )
+
+    // Delegation state
+    const [requestMode, setRequestMode] = useState<"self" | "delegated">("self")
+    const [delegateForStaff, setDelegateForStaff] = useState<string | null>(null)
+
+    // Fetch department staff for delegation (only when in delegated mode)
+    const userDepartmentId = (sessionData?.user?.department as any)?._id || sessionData?.user?.department
+    const { data: deptStaffData } = useSWR(
+        canDelegate && requestMode === "delegated" && userDepartmentId
+            ? `${baseUrl}/staff?op=by-department&departmentId=${encodeURIComponent(userDepartmentId)}`
+            : null,
+        fetcher(sessionData.token as string)
+    )
+
+    // Fetch delegate target's leave balances (when delegating for someone)
+    const { data: delegateBalancesData } = useSWR(
+        requestMode === "delegated" && delegateForStaff
+            ? `${baseUrl}/leave-balances?op=by-staff&staffId=${delegateForStaff}`
+            : null,
+        fetcher(sessionData.token as string)
+    )
+
+    // Get department staff list excluding self
+    const departmentStaff = (deptStaffData?.data?.staff || []).filter(
+        (s: StaffInterface) => s._id !== sessionData?.user?._id
     )
 
     // Disclosures
@@ -223,9 +294,15 @@ export default function LeaveRequests() {
         return () => clearTimeout(debounce)
     }, [formData.startDate, formData.endDate, baseUrl, sessionData?.token])
 
-    // Get available leave types based on gender
+    // Get available leave types based on gender (uses delegate's gender when in delegated mode)
     const getAvailableLeaveTypes = () => {
-        const gender = sessionData?.user?.gender
+        let gender = sessionData?.user?.gender
+        if (requestMode === "delegated" && delegateForStaff) {
+            const targetStaff = departmentStaff.find((s: StaffInterface) => s._id === delegateForStaff)
+            if (targetStaff) {
+                gender = targetStaff.gender
+            }
+        }
         return LEAVE_TYPE_OPTIONS.filter((option) => {
             if (option.value === LeaveTypes.MATERNITY && gender !== Gender.FEMALE) {
                 return false
@@ -237,9 +314,12 @@ export default function LeaveRequests() {
         })
     }
 
-    // Get balance for a leave type
+    // Get balance for a leave type (uses delegate's balances when in delegated mode)
     const getBalance = (leaveType: LeaveTypes) => {
-        const balance = balancesData?.data?.balances?.find(
+        const sourceData = (requestMode === "delegated" && delegateForStaff)
+            ? delegateBalancesData
+            : balancesData
+        const balance = sourceData?.data?.balances?.find(
             (b: any) => b.leaveType === leaveType
         )
         if (!balance) return null
@@ -266,6 +346,267 @@ export default function LeaveRequests() {
             return `${start.toFormat("LLL d")} - ${end.toFormat("d, yyyy")}`
         }
         return `${start.toFormat("LLL d")} - ${end.toFormat("LLL d, yyyy")}`
+    }
+
+    // Export utility functions
+    const exportToCSV = (data: any[], filename: string, headers: string[], dataMapper: (item: any) => string[]) => {
+        const csvContent = [
+            headers.join(','),
+            ...data.map(dataMapper).map(row => row.map(cell => `"${cell}"`).join(','))
+        ].join('\n')
+
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+        const link = document.createElement('a')
+        const url = URL.createObjectURL(blob)
+        link.setAttribute('href', url)
+        link.setAttribute('download', `${filename}_${DateTime.now().toFormat('yyyy-MM-dd')}.csv`)
+        link.style.visibility = 'hidden'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+    }
+
+    const exportToExcel = (data: any[], filename: string, headers: string[], dataMapper: (item: any) => any[], sheetName?: string) => {
+        // Prepare data for Excel
+        const worksheetData = [headers, ...data.map(dataMapper)]
+        
+        // Create worksheet
+        const ws = XLSX.utils.aoa_to_sheet(worksheetData)
+        
+        // Create workbook
+        const wb = XLSX.utils.book_new()
+        XLSX.utils.book_append_sheet(wb, ws, sheetName || 'Sheet1')
+        
+        // Auto-size columns
+        const colWidths = headers.map(header => ({ wch: Math.max(header.length, 15) }))
+        ws['!cols'] = colWidths
+        
+        // Generate Excel file and download
+        XLSX.writeFile(wb, `${filename}_${DateTime.now().toFormat('yyyy-MM-dd')}.xlsx`)
+    }
+
+    const exportMyRequests = () => {
+        if (!myRequestsData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Status", "Created At"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.status || '',
+            DateTime.fromISO(request.createdAt).toFormat('yyyy-MM-dd HH:mm')
+        ]
+        
+        exportToCSV(myRequestsData.data.requests, 'my_requests', headers, dataMapper)
+    }
+
+    const exportMyRequestsExcel = () => {
+        if (!myRequestsData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Status", "Created At"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.status || '',
+            DateTime.fromISO(request.createdAt).toFormat('yyyy-MM-dd HH:mm')
+        ]
+        
+        exportToExcel(myRequestsData.data.requests, 'my_requests', headers, dataMapper, 'My Leave Requests')
+    }
+
+    const exportPendingEndorsements = () => {
+        if (!endorsementsData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Created At", "Department"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            DateTime.fromISO(request.createdAt).toFormat('yyyy-MM-dd HH:mm'),
+            request.department?.name || ''
+        ]
+        
+        exportToCSV(endorsementsData.data.requests, 'pending_endorsements', headers, dataMapper)
+    }
+
+    const exportPendingEndorsementsExcel = () => {
+        if (!endorsementsData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Created At", "Department"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            DateTime.fromISO(request.createdAt).toFormat('yyyy-MM-dd HH:mm'),
+            request.department?.name || ''
+        ]
+        
+        exportToExcel(endorsementsData.data.requests, 'pending_endorsements', headers, dataMapper, 'Pending Endorsements')
+    }
+
+    const exportPendingApprovals = () => {
+        if (!approvalsData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Endorsed By", "Endorsed At", "Department"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.endorsement?.byStaff?.name || '',
+            request.endorsement?.at ? DateTime.fromISO(request.endorsement.at).toFormat('yyyy-MM-dd HH:mm') : '',
+            request.department?.name || ''
+        ]
+        
+        exportToCSV(approvalsData.data.requests, 'pending_approvals', headers, dataMapper)
+    }
+
+    const exportPendingApprovalsExcel = () => {
+        if (!approvalsData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Endorsed By", "Endorsed At", "Department"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.endorsement?.byStaff?.name || '',
+            request.endorsement?.at ? DateTime.fromISO(request.endorsement.at).toFormat('yyyy-MM-dd HH:mm') : '',
+            request.department?.name || ''
+        ]
+        
+        exportToExcel(approvalsData.data.requests, 'pending_approvals', headers, dataMapper, 'Pending Approvals')
+    }
+
+    const exportDelegatedRequests = () => {
+        if (!delegatedRequestsData?.data?.requests?.length) return
+        
+        const headers = ["Requested For", "Requested For ID", "Leave Type", "Start Date", "End Date", "Working Days", "Requested By", "Status", "Created At"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.delegatedBy?.name || '',
+            request.status || '',
+            DateTime.fromISO(request.createdAt).toFormat('yyyy-MM-dd HH:mm')
+        ]
+        
+        exportToCSV(delegatedRequestsData.data.requests, 'delegated_requests', headers, dataMapper)
+    }
+
+    const exportDelegatedRequestsExcel = () => {
+        if (!delegatedRequestsData?.data?.requests?.length) return
+        
+        const headers = ["Requested For", "Requested For ID", "Leave Type", "Start Date", "End Date", "Working Days", "Requested By", "Status", "Created At"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.delegatedBy?.name || '',
+            request.status || '',
+            DateTime.fromISO(request.createdAt).toFormat('yyyy-MM-dd HH:mm')
+        ]
+        
+        exportToExcel(delegatedRequestsData.data.requests, 'delegated_requests', headers, dataMapper, 'Delegated Requests')
+    }
+
+    const exportMyEndorsed = () => {
+        if (!myEndorsedData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Endorsed At", "Current Status", "Department"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.endorsedAt || request.endorsement?.at ? DateTime.fromISO(request.endorsedAt || request.endorsement.at).toFormat('yyyy-MM-dd HH:mm') : '',
+            request.status || '',
+            request.department?.name || ''
+        ]
+        
+        exportToCSV(myEndorsedData.data.requests, 'my_endorsed_requests', headers, dataMapper)
+    }
+
+    const exportMyEndorsedExcel = () => {
+        if (!myEndorsedData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Endorsed At", "Current Status", "Department"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.endorsedAt || request.endorsement?.at ? DateTime.fromISO(request.endorsedAt || request.endorsement.at).toFormat('yyyy-MM-dd HH:mm') : '',
+            request.status || '',
+            request.department?.name || ''
+        ]
+        
+        exportToExcel(myEndorsedData.data.requests, 'my_endorsed_requests', headers, dataMapper, 'My Endorsed Requests')
+    }
+
+    const exportMyApproved = () => {
+        if (!myApprovedData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Approved At", "Current Status", "Department"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.approvedAt || request.approval?.at ? DateTime.fromISO(request.approvedAt || request.approval.at).toFormat('yyyy-MM-dd HH:mm') : '',
+            request.status || '',
+            request.department?.name || ''
+        ]
+        
+        exportToCSV(myApprovedData.data.requests, 'my_approved_requests', headers, dataMapper)
+    }
+
+    const exportMyApprovedExcel = () => {
+        if (!myApprovedData?.data?.requests?.length) return
+        
+        const headers = ["Staff Name", "Staff ID", "Leave Type", "Start Date", "End Date", "Working Days", "Approved At", "Current Status", "Department"]
+        const dataMapper = (request: any) => [
+            request.staff?.name || '',
+            request.staff?.staffId || '',
+            request.leaveType || '',
+            DateTime.fromISO(request.startDate).toFormat('yyyy-MM-dd'),
+            DateTime.fromISO(request.endDate).toFormat('yyyy-MM-dd'),
+            request.workingDays || 0,
+            request.approvedAt || request.approval?.at ? DateTime.fromISO(request.approvedAt || request.approval.at).toFormat('yyyy-MM-dd HH:mm') : '',
+            request.status || '',
+            request.department?.name || ''
+        ]
+        
+        exportToExcel(myApprovedData.data.requests, 'my_approved_requests', headers, dataMapper, 'My Approved Requests')
     }
 
     // Handle tab change
@@ -373,15 +714,22 @@ export default function LeaveRequests() {
                 }
             }
 
+            const payload: any = {
+                leaveType: formData.leaveType,
+                startDate: formData.startDate,
+                endDate: formData.endDate,
+                reason: formData.reason || undefined,
+                attachments: uploadedAttachments,
+            }
+
+            // Add delegation data if in delegated mode
+            if (requestMode === "delegated" && delegateForStaff) {
+                payload.delegateForStaffId = delegateForStaff
+            }
+
             const response = await axios.post(
                 `${baseUrl}/leave-requests`,
-                {
-                    leaveType: formData.leaveType,
-                    startDate: formData.startDate,
-                    endDate: formData.endDate,
-                    reason: formData.reason || undefined,
-                    attachments: uploadedAttachments,
-                },
+                payload,
                 {
                     headers: {
                         Authorization: `Bearer ${sessionData?.token}`,
@@ -400,6 +748,8 @@ export default function LeaveRequests() {
             })
             setPeriodData(null)
             setAttachments([])
+            setRequestMode("self")
+            setDelegateForStaff(null)
 
             await mutateMyRequests()
             onClose()
@@ -661,6 +1011,38 @@ export default function LeaveRequests() {
         return isOwner && withdrawableStatuses.includes(status)
     }
 
+    // Can withdraw delegated request check
+    const canWithdrawDelegated = (request: any) => {
+        // Check if the current user is the person the request was made for
+        let staffId = null
+        
+        if (request.staff?._id) {
+            staffId = request.staff._id
+        } else if (request.staff?.id) {
+            staffId = request.staff.id
+        } else if (typeof request.staff === 'string') {
+            staffId = request.staff
+        } else if (request.staffId) {
+            staffId = request.staffId
+        } else if (request.staff_id) {
+            staffId = request.staff_id
+        }
+        
+        const isRequestedForUser = staffId === sessionData?.user?._id || staffId === sessionData?.user?.id
+        const status = request.status?.toLowerCase()
+        
+        // Allow withdrawal for various pending/early statuses
+        const withdrawableStatuses = [
+            LeaveStatus.PENDING,
+            LeaveStatus.ENDORSED,
+            "pending",
+            "pending_approval",
+            "awaiting_endorsement",
+        ]
+        
+        return isRequestedForUser && withdrawableStatuses.includes(status)
+    }
+
     // Render request row for table
     const renderRequestRow = (request: any) => (
         <TableRow key={request._id}>
@@ -776,6 +1158,160 @@ export default function LeaveRequests() {
                             }}
                         >
                             <ThumbsDown className='size-4' />
+                        </Button>
+                    </Tooltip>
+                </div>
+            </TableCell>
+        </TableRow>
+    )
+
+    // Render delegated request row for table
+    const renderDelegatedRequestRow = (request: any) => (
+        <TableRow key={request._id}>
+            <TableCell>
+                <div className='flex flex-col'>
+                    <span className='font-medium'>{request.staff?.name}</span>
+                    <span className='text-xs text-zinc-500'>
+                        {request.staff?.staffId}
+                    </span>
+                    <span className='text-xs text-primary'>
+                        Requested by: {request.delegatedBy?.name}
+                    </span>
+                </div>
+            </TableCell>
+            <TableCell>
+                <LeaveTypeChip type={request.leaveType} />
+            </TableCell>
+            <TableCell className='text-sm'>
+                {formatDateRange(request.startDate, request.endDate)}
+            </TableCell>
+            <TableCell className='text-sm font-medium'>
+                {request.workingDays} day{request.workingDays !== 1 ? "s" : ""}
+            </TableCell>
+            <TableCell>
+                <LeaveStatusChip status={request.status} />
+            </TableCell>
+            <TableCell>
+                <div className='flex items-center gap-2'>
+                    <Tooltip content='View details'>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            isIconOnly
+                            onPress={() => handleViewRequest(request)}
+                        >
+                            <Eye className='size-4' />
+                        </Button>
+                    </Tooltip>
+                    {canWithdrawDelegated(request) ? (
+                        <Tooltip content='Withdraw request'>
+                            <Button
+                                size='sm'
+                                color='warning'
+                                variant='flat'
+                                isIconOnly
+                                onPress={() => {
+                                    setSelectedRequest(request)
+                                    withdrawDisclosure.onOpen()
+                                }}
+                            >
+                                <Undo2 className='size-4' />
+                            </Button>
+                        </Tooltip>
+                    ) : null}
+                </div>
+            </TableCell>
+        </TableRow>
+    )
+
+    // Render endorsed request row for table
+    const renderEndorsedRequestRow = (request: any) => (
+        <TableRow key={request._id}>
+            <TableCell>
+                <div className='flex flex-col'>
+                    <span className='font-medium'>{request.staff?.name}</span>
+                    <span className='text-xs text-zinc-500'>
+                        {request.staff?.staffId}
+                    </span>
+                </div>
+            </TableCell>
+            <TableCell>
+                <LeaveTypeChip type={request.leaveType} />
+            </TableCell>
+            <TableCell className='text-sm'>
+                {formatDateRange(request.startDate, request.endDate)}
+            </TableCell>
+            <TableCell className='text-sm font-medium'>
+                {request.workingDays} day{request.workingDays !== 1 ? "s" : ""}
+            </TableCell>
+            <TableCell className='text-sm text-zinc-500'>
+                {request.endorsedAt || request.endorsement?.at ? 
+                    DateTime.fromISO(request.endorsedAt || request.endorsement?.at).toRelative() : 
+                    '-'
+                }
+            </TableCell>
+            <TableCell>
+                <LeaveStatusChip status={request.status} />
+            </TableCell>
+            <TableCell>
+                <div className='flex items-center gap-2'>
+                    <Tooltip content='View details'>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            isIconOnly
+                            onPress={() => handleViewRequest(request)}
+                        >
+                            <Eye className='size-4' />
+                        </Button>
+                    </Tooltip>
+                </div>
+            </TableCell>
+        </TableRow>
+    )
+
+    // Render approved request row for table
+    const renderApprovedRequestRow = (request: any) => (
+        <TableRow key={request._id}>
+            <TableCell>
+                <div className='flex flex-col'>
+                    <span className='font-medium'>{request.staff?.name}</span>
+                    <span className='text-xs text-zinc-500'>
+                        {request.staff?.staffId}
+                    </span>
+                </div>
+            </TableCell>
+            <TableCell>
+                <LeaveTypeChip type={request.leaveType} />
+            </TableCell>
+            <TableCell className='text-sm'>
+                {formatDateRange(request.startDate, request.endDate)}
+            </TableCell>
+            <TableCell className='text-sm font-medium'>
+                {request.workingDays} day{request.workingDays !== 1 ? "s" : ""}
+            </TableCell>
+            <TableCell className='text-sm text-zinc-500'>
+                {request.approvedAt || request.approval?.at ? 
+                    DateTime.fromISO(request.approvedAt || request.approval?.at).toRelative() : 
+                    '-'
+                }
+            </TableCell>
+            <TableCell>
+                <LeaveStatusChip status={request.status} />
+            </TableCell>
+            <TableCell>
+                <div className='flex items-center gap-2'>
+                    <Tooltip content='View details'>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            isIconOnly
+                            onPress={() => handleViewRequest(request)}
+                        >
+                            <Eye className='size-4' />
                         </Button>
                     </Tooltip>
                 </div>
@@ -908,12 +1444,89 @@ export default function LeaveRequests() {
                                 )}
                             </button>
                         )}
+                        {canEndorse && (
+                            <button
+                                onClick={() => handleTabChange("my-endorsed")}
+                                className={`flex items-center gap-2 pb-3 px-1 border-b-2 transition-colors ${
+                                    currentTab === "my-endorsed"
+                                        ? "border-warning text-warning"
+                                        : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                                }`}
+                            >
+                                <ThumbsUp className='size-4' />
+                                <span>My Endorsed</span>
+                                {myEndorsedData?.data?.requests?.length > 0 && (
+                                    <Chip size='sm' color='warning' variant='flat'>
+                                        {myEndorsedData.data.requests.length}
+                                    </Chip>
+                                )}
+                            </button>
+                        )}
+                        {canApprove && (
+                            <button
+                                onClick={() => handleTabChange("my-approved")}
+                                className={`flex items-center gap-2 pb-3 px-1 border-b-2 transition-colors ${
+                                    currentTab === "my-approved"
+                                        ? "border-success text-success"
+                                        : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                                }`}
+                            >
+                                <CheckCircle className='size-4' />
+                                <span>My Approved</span>
+                                {myApprovedData?.data?.requests?.length > 0 && (
+                                    <Chip size='sm' color='success' variant='flat'>
+                                        {myApprovedData.data.requests.length}
+                                    </Chip>
+                                )}
+                            </button>
+                        )}
+                        <button
+                            onClick={() => handleTabChange("delegated-requests")}
+                            className={`flex items-center gap-2 pb-3 px-1 border-b-2 transition-colors ${
+                                currentTab === "delegated-requests"
+                                    ? "border-primary text-primary"
+                                    : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                            }`}
+                        >
+                            <Users className='size-4' />
+                            <span>Delegated Requests</span>
+                            {delegatedRequestsData?.data?.requests?.length > 0 && (
+                                <Chip size='sm' color='primary' variant='flat'>
+                                    {delegatedRequestsData.data.requests.length}
+                                </Chip>
+                            )}
+                        </button>
                     </div>
 
                     {/* Tab Content */}
                     <div className='mt-4'>
                         {currentTab === "my-requests" && (
                             <>
+                                <div className='flex justify-between items-center mb-4'>
+                                    <h3 className='text-lg font-semibold'>My Leave Requests</h3>
+                                    <div className='flex gap-2'>
+                                        <Button
+                                            size='sm'
+                                            color='primary'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportMyRequests}
+                                            isDisabled={!myRequestsData?.data?.requests?.length}
+                                        >
+                                            Export CSV
+                                        </Button>
+                                        <Button
+                                            size='sm'
+                                            color='success'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportMyRequestsExcel}
+                                            isDisabled={!myRequestsData?.data?.requests?.length}
+                                        >
+                                            Export Excel
+                                        </Button>
+                                    </div>
+                                </div>
                                 <DataTable
                                     isLoading={myRequestsLoading}
                                     columns={["Leave Type", "Date Range", "Days", "Status", "Actions"]}
@@ -959,6 +1572,31 @@ export default function LeaveRequests() {
                         )}
                         {currentTab === "pending-endorsements" && canEndorse && (
                             <>
+                                <div className='flex justify-between items-center mb-4'>
+                                    <h3 className='text-lg font-semibold'>Pending Endorsements</h3>
+                                    <div className='flex gap-2'>
+                                        <Button
+                                            size='sm'
+                                            color='primary'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportPendingEndorsements}
+                                            isDisabled={!endorsementsData?.data?.requests?.length}
+                                        >
+                                            Export CSV
+                                        </Button>
+                                        <Button
+                                            size='sm'
+                                            color='success'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportPendingEndorsementsExcel}
+                                            isDisabled={!endorsementsData?.data?.requests?.length}
+                                        >
+                                            Export Excel
+                                        </Button>
+                                    </div>
+                                </div>
                                 <DataTable
                                     isLoading={endorsementsLoading}
                                     columns={["Staff", "Leave Type", "Date Range", "Days", "Submitted", "Actions"]}
@@ -987,6 +1625,31 @@ export default function LeaveRequests() {
                         )}
                         {currentTab === "pending-approvals" && canApprove && (
                             <>
+                                <div className='flex justify-between items-center mb-4'>
+                                    <h3 className='text-lg font-semibold'>Pending Approvals</h3>
+                                    <div className='flex gap-2'>
+                                        <Button
+                                            size='sm'
+                                            color='primary'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportPendingApprovals}
+                                            isDisabled={!approvalsData?.data?.requests?.length}
+                                        >
+                                            Export CSV
+                                        </Button>
+                                        <Button
+                                            size='sm'
+                                            color='success'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportPendingApprovalsExcel}
+                                            isDisabled={!approvalsData?.data?.requests?.length}
+                                        >
+                                            Export Excel
+                                        </Button>
+                                    </div>
+                                </div>
                                 <DataTable
                                     isLoading={approvalsLoading}
                                     columns={["Staff", "Leave Type", "Date Range", "Days", "Endorsed", "Actions"]}
@@ -1007,6 +1670,185 @@ export default function LeaveRequests() {
                                                 </div>
                                                 <p className='text-sm mt-1'>{formatDateRange(request.startDate, request.endDate)}</p>
                                                 <p className='text-xs text-zinc-500'>{request.workingDays} days - Endorsed {DateTime.fromISO(request.endorsement?.at).toRelative()}</p>
+                                            </div>
+                                        ),
+                                    }))}
+                                />
+                            </>
+                        )}
+                        {currentTab === "delegated-requests" && (
+                            <>
+                                <div className='flex justify-between items-center mb-4'>
+                                    <h3 className='text-lg font-semibold'>Delegated Requests</h3>
+                                    <div className='flex gap-2'>
+                                        <Button
+                                            size='sm'
+                                            color='primary'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportDelegatedRequests}
+                                            isDisabled={!delegatedRequestsData?.data?.requests?.length}
+                                        >
+                                            Export CSV
+                                        </Button>
+                                        <Button
+                                            size='sm'
+                                            color='success'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportDelegatedRequestsExcel}
+                                            isDisabled={!delegatedRequestsData?.data?.requests?.length}
+                                        >
+                                            Export Excel
+                                        </Button>
+                                    </div>
+                                </div>
+                                <DataTable
+                                    isLoading={delegatedRequestsLoading}
+                                    columns={["Requested For", "Leave Type", "Date Range", "Days", "Status", "Actions"]}
+                                >
+                                    {delegatedRequestsData?.data?.requests?.map((request: any) => renderDelegatedRequestRow(request))}
+                                </DataTable>
+                                <MobileList
+                                    isLoading={delegatedRequestsLoading}
+                                    isEmpty={!delegatedRequestsData?.data?.requests?.length}
+                                    emptyContent='No delegated requests found'
+                                    listContent={delegatedRequestsData?.data?.requests?.map((request: any) => ({
+                                        startIcon: <Users className='size-5 text-primary' />,
+                                        content: (
+                                            <div onClick={() => handleViewRequest(request)} className='cursor-pointer'>
+                                                <div className='flex items-center justify-between'>
+                                                    <div className='flex flex-col'>
+                                                        <span className='font-medium'>{request.staff?.name}</span>
+                                                        <span className='text-xs text-zinc-500'>Requested by: {request.delegatedBy?.name}</span>
+                                                    </div>
+                                                    <LeaveTypeChip type={request.leaveType} />
+                                                </div>
+                                                <p className='text-sm mt-1'>{formatDateRange(request.startDate, request.endDate)}</p>
+                                                <p className='text-xs text-zinc-500'>{request.workingDays} days</p>
+                                                {canWithdrawDelegated(request) && (
+                                                    <div className='mt-3 pt-3 border-t border-zinc-200 dark:border-zinc-700'>
+                                                        <Button
+                                                            size='sm'
+                                                            color='warning'
+                                                            variant='flat'
+                                                            startContent={<Undo2 className='size-4' />}
+                                                            onPress={() => {
+                                                                setSelectedRequest(request)
+                                                                withdrawDisclosure.onOpen()
+                                                            }}
+                                                            className='w-full'
+                                                        >
+                                                            Withdraw Request
+                                                        </Button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ),
+                                    }))}
+                                />
+                            </>
+                        )}
+                        {currentTab === "my-endorsed" && canEndorse && (
+                            <>
+                                <div className='flex justify-between items-center mb-4'>
+                                    <h3 className='text-lg font-semibold'>My Endorsed Requests</h3>
+                                    <div className='flex gap-2'>
+                                        <Button
+                                            size='sm'
+                                            color='primary'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportMyEndorsed}
+                                            isDisabled={!myEndorsedData?.data?.requests?.length}
+                                        >
+                                            Export CSV
+                                        </Button>
+                                        <Button
+                                            size='sm'
+                                            color='success'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportMyEndorsedExcel}
+                                            isDisabled={!myEndorsedData?.data?.requests?.length}
+                                        >
+                                            Export Excel
+                                        </Button>
+                                    </div>
+                                </div>
+                                <DataTable
+                                    isLoading={myEndorsedLoading}
+                                    columns={["Staff", "Leave Type", "Date Range", "Days", "Endorsed At", "Status", "Actions"]}
+                                >
+                                    {myEndorsedData?.data?.requests?.map((request: any) => renderEndorsedRequestRow(request))}
+                                </DataTable>
+                                <MobileList
+                                    isLoading={myEndorsedLoading}
+                                    isEmpty={!myEndorsedData?.data?.requests?.length}
+                                    emptyContent='No endorsed requests found'
+                                    listContent={myEndorsedData?.data?.requests?.map((request: any) => ({
+                                        startIcon: <ThumbsUp className='size-5 text-warning' />,
+                                        content: (
+                                            <div onClick={() => handleViewRequest(request)} className='cursor-pointer'>
+                                                <div className='flex items-center justify-between'>
+                                                    <span className='font-medium'>{request.staff?.name}</span>
+                                                    <LeaveTypeChip type={request.leaveType} />
+                                                </div>
+                                                <p className='text-sm mt-1'>{formatDateRange(request.startDate, request.endDate)}</p>
+                                                <p className='text-xs text-zinc-500'>{request.workingDays} days - Endorsed {DateTime.fromISO(request.endorsedAt || request.endorsement?.at).toRelative()}</p>
+                                            </div>
+                                        ),
+                                    }))}
+                                />
+                            </>
+                        )}
+                        {currentTab === "my-approved" && canApprove && (
+                            <>
+                                <div className='flex justify-between items-center mb-4'>
+                                    <h3 className='text-lg font-semibold'>My Approved Requests</h3>
+                                    <div className='flex gap-2'>
+                                        <Button
+                                            size='sm'
+                                            color='primary'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportMyApproved}
+                                            isDisabled={!myApprovedData?.data?.requests?.length}
+                                        >
+                                            Export CSV
+                                        </Button>
+                                        <Button
+                                            size='sm'
+                                            color='success'
+                                            variant='flat'
+                                            startContent={<Download className='size-4' />}
+                                            onPress={exportMyApprovedExcel}
+                                            isDisabled={!myApprovedData?.data?.requests?.length}
+                                        >
+                                            Export Excel
+                                        </Button>
+                                    </div>
+                                </div>
+                                <DataTable
+                                    isLoading={myApprovedLoading}
+                                    columns={["Staff", "Leave Type", "Date Range", "Days", "Approved At", "Status", "Actions"]}
+                                >
+                                    {myApprovedData?.data?.requests?.map((request: any) => renderApprovedRequestRow(request))}
+                                </DataTable>
+                                <MobileList
+                                    isLoading={myApprovedLoading}
+                                    isEmpty={!myApprovedData?.data?.requests?.length}
+                                    emptyContent='No approved requests found'
+                                    listContent={myApprovedData?.data?.requests?.map((request: any) => ({
+                                        startIcon: <CheckCircle className='size-5 text-success' />,
+                                        content: (
+                                            <div onClick={() => handleViewRequest(request)} className='cursor-pointer'>
+                                                <div className='flex items-center justify-between'>
+                                                    <span className='font-medium'>{request.staff?.name}</span>
+                                                    <LeaveTypeChip type={request.leaveType} />
+                                                </div>
+                                                <p className='text-sm mt-1'>{formatDateRange(request.startDate, request.endDate)}</p>
+                                                <p className='text-xs text-zinc-500'>{request.workingDays} days - Approved {DateTime.fromISO(request.approvedAt || request.approval?.at).toRelative()}</p>
                                             </div>
                                         ),
                                     }))}
@@ -1242,6 +2084,82 @@ export default function LeaveRequests() {
                                     </Card>
                                 )}
 
+                                {/* Delegation Section - only visible to users with DELEGATE permission */}
+                                {canDelegate && (
+                                    <div className='space-y-3'>
+                                        <div>
+                                            <p className='text-sm font-medium mb-2'>Request Type</p>
+                                            <RadioGroup
+                                                orientation='horizontal'
+                                                value={requestMode}
+                                                onValueChange={(value) => {
+                                                    setRequestMode(value as "self" | "delegated")
+                                                    if (value === "self") {
+                                                        setDelegateForStaff(null)
+                                                    }
+                                                }}
+                                                size='sm'
+                                            >
+                                                <Radio value='self'>Self Request</Radio>
+                                                <Radio value='delegated'>Delegated Request</Radio>
+                                            </RadioGroup>
+                                        </div>
+
+                                        {requestMode === "delegated" && (
+                                            <>
+                                                <Autocomplete
+                                                    label='Request on behalf of'
+                                                    variant='bordered'
+                                                    labelPlacement='outside'
+                                                    placeholder='Select a department colleague'
+                                                    isRequired
+                                                    selectedKey={delegateForStaff}
+                                                    onSelectionChange={(key) =>
+                                                        setDelegateForStaff(key as string)
+                                                    }
+                                                    startContent={<Users className='size-4 text-zinc-400' />}
+                                                    classNames={{
+                                                        base: "w-full",
+                                                    }}
+                                                >
+                                                    {departmentStaff.map((staff: StaffInterface) => (
+                                                        <AutocompleteItem
+                                                            key={staff._id!}
+                                                            textValue={staff.name}
+                                                        >
+                                                            <div className='flex items-center gap-2'>
+                                                                <User className='size-4 text-zinc-400' />
+                                                                <div>
+                                                                    <p className='text-sm'>{staff.name}</p>
+                                                                    <p className='text-xs text-zinc-500'>{staff.staffId}</p>
+                                                                </div>
+                                                            </div>
+                                                        </AutocompleteItem>
+                                                    ))}
+                                                </Autocomplete>
+
+                                                {delegateForStaff && (
+                                                    <div className='p-3 bg-warning-50 dark:bg-warning-900/20 rounded-lg border border-warning-200 dark:border-warning-800'>
+                                                        <div className='flex items-center gap-2 mb-1'>
+                                                            <AlertCircle className='size-4 text-warning-600' />
+                                                            <span className='text-sm font-medium text-warning-800 dark:text-warning-200'>
+                                                                Delegated Request
+                                                            </span>
+                                                        </div>
+                                                        <p className='text-xs text-warning-700 dark:text-warning-300'>
+                                                            This leave request will be created on behalf of{' '}
+                                                            <strong>{departmentStaff.find((s: StaffInterface) => s._id === delegateForStaff)?.name}</strong>.
+                                                            The balance shown above reflects their available leave.
+                                                        </p>
+                                                    </div>
+                                                )}
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+
+                                <Divider />
+
                                 <Textarea
                                     label='Reason (Optional)'
                                     variant='bordered'
@@ -1321,7 +2239,8 @@ export default function LeaveRequests() {
                                         !formData.endDate ||
                                         !periodData ||
                                         periodData.workingDays === 0 ||
-                                        (LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(formData.leaveType as any) && attachments.length === 0)
+                                        (LEAVE_TYPES_REQUIRING_DOCUMENTS.includes(formData.leaveType as any) && attachments.length === 0) ||
+                                        (requestMode === "delegated" && !delegateForStaff)
                                     }
                                 >
                                     Submit Request

@@ -42,6 +42,14 @@ async function seedUser() {
         // Users to create
         const users = [
             {
+                name: "Admin User",
+                phone: "0593125184",
+                email: "admin@company.com",
+                staffId: "ADM001",
+                permissions: ["ADMIN", "STAFF"],
+                gender: "male",
+            },
+            {
                 name: "Team Lead",
                 phone: "0501234567",
                 email: "teamlead@company.com",

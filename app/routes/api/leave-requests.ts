@@ -99,6 +99,30 @@ export async function loader({ request }: LoaderFunctionArgs) {
           : errorResponse(result.message, null, 500)
       }
 
+      case "delegated-requests": {
+        // Get delegated requests (requests made on behalf of others)
+        const result = await LeaveRequestController.getDelegatedRequests(req)
+        return result.status === "success"
+          ? successResponse(result.message, result.data)
+          : errorResponse(result.message, null, 500)
+      }
+
+      case "my-endorsed": {
+        // Get requests I have endorsed
+        const result = await LeaveRequestController.getMyEndorsedRequests(req)
+        return result.status === "success"
+          ? successResponse(result.message, result.data)
+          : errorResponse(result.message, null, 500)
+      }
+
+      case "my-approved": {
+        // Get requests I have approved
+        const result = await LeaveRequestController.getMyApprovedRequests(req)
+        return result.status === "success"
+          ? successResponse(result.message, result.data)
+          : errorResponse(result.message, null, 500)
+      }
+
       case "summary": {
         // Get leave request summary (requires HR/Admin/Manager permissions)
         if (

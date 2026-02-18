@@ -227,6 +227,10 @@ export class DashboardController {
                         activeStaff > 0
                             ? Math.round((requestsYTD / activeStaff) * 10) / 10
                             : 0,
+                    delegatedRequests: await LeaveRequest.countDocuments({
+                        delegatedBy: { $exists: true },
+                        createdAt: { $gte: new Date(currentYear, 0, 1) },
+                    }),
                 },
             }
 
@@ -263,24 +267,32 @@ export class DashboardController {
             // Get manager's department if not specified
             let deptId = departmentId
             if (!deptId) {
-                const activeContract = await StaffContract.findOne({
-                    staff: user._id,
-                    status: ContractStatus.ACTIVE,
-                }).populate("position")
-
-                if (activeContract) {
-                    const position = await JobPosition.findById(
-                        activeContract.position
-                    )
-                    if (position) {
-                        deptId = position.department
-                    }
-                }
-
-                // Also check if user is department head
+                // Check if user is department head
                 const headedDept = await Department.findOne({ head: user._id })
                 if (headedDept) {
                     deptId = headedDept._id
+                }
+
+                // Try active contract's position department
+                if (!deptId) {
+                    const activeContract = await StaffContract.findOne({
+                        staff: user._id,
+                        status: ContractStatus.ACTIVE,
+                    })
+
+                    if (activeContract) {
+                        const position = await JobPosition.findById(
+                            activeContract.position
+                        )
+                        if (position) {
+                            deptId = position.department
+                        }
+                    }
+                }
+
+                // Fallback to staff's own department
+                if (!deptId && user.department) {
+                    deptId = user.department
                 }
             }
 
@@ -514,6 +526,11 @@ export class DashboardController {
                         startDate: { $gte: today, $lte: fourteenDaysFromNow },
                     }),
                     teamOnLeave: onLeaveToday.map((s) => s.name),
+                    delegatedRequests: await LeaveRequest.countDocuments({
+                        department: deptId,
+                        delegatedBy: { $exists: true },
+                        createdAt: { $gte: new Date(today.getFullYear(), 0, 1) },
+                    }),
                 },
             }
 
@@ -811,6 +828,12 @@ export class DashboardController {
                                       10
                               ) / 10
                             : 0,
+                    delegatedRequests: await LeaveRequest.countDocuments({
+                        $or: [
+                            { delegatedBy: user._id },
+                            { staff: user._id, delegatedBy: { $exists: true } },
+                        ],
+                    }),
                 },
             }
 

@@ -13,6 +13,12 @@ import {
     Tabs,
     Progress,
     Skeleton,
+    Table,
+    TableHeader,
+    TableColumn,
+    TableBody,
+    TableRow,
+    TableCell,
 } from "@heroui/react"
 import { useState } from "react"
 import axios from "axios"
@@ -24,6 +30,7 @@ import useSWR from "swr"
 import { DateTime } from "luxon"
 import { fetcher } from "~/ui/lib/fetcher"
 import { LeaveTypes, LeaveStatus } from "~/utils/types"
+import { LeaveStatusChip, LeaveTypeChip } from "~/ui/components/chips"
 import {
     BarChart3,
     Calendar,
@@ -202,12 +209,12 @@ export default function Reports() {
         fetcher(sessionData.token as string)
     )
 
-    // Fetch leave balances report
+    // Fetch leave balances report (annual leave only)
     const { data: balancesReport, isLoading: balancesLoading, mutate: mutateBalances } = useSWR(
         currentTab === "balances"
-            ? `${baseUrl}/reports?op=leave-balances&year=${filters.year}${
+            ? `${baseUrl}/reports?op=leave-balances&year=${filters.year}&leaveType=annual${
                   filters.departmentId ? `&departmentId=${filters.departmentId}` : ""
-              }${filters.leaveType ? `&leaveType=${filters.leaveType}` : ""}`
+              }`
             : null,
         fetcher(sessionData.token as string)
     )
@@ -590,177 +597,408 @@ export default function Reports() {
                                         </CardBody>
                                     </Card>
                                 )}
-                            </div>
-                        ) : (
-                            <EmptyState icon={FileText} message="No leave request data available" />
-                        )}
-                    </Tab>
 
-                    {/* Leave Balances Report */}
-                    <Tab
-                        key="balances"
-                        title={
-                            <div className="flex items-center gap-2">
-                                <PieChart className="size-4" />
-                                <span>Balances</span>
-                            </div>
-                        }
-                    >
-                        {balancesLoading ? (
-                            <ReportsSkeleton />
-                        ) : balancesReport?.data?.statistics ? (
-                            <div className="space-y-6">
-                                {/* KPI Cards */}
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                                    <KPICard
-                                        title="Total Allocated"
-                                        value={balancesReport.data.statistics.totals.totalAllocated}
-                                        subtitle="days"
-                                        icon={Calendar}
-                                        color="primary"
-                                    />
-                                    <KPICard
-                                        title="Total Used"
-                                        value={balancesReport.data.statistics.totals.totalUsed}
-                                        subtitle="days"
-                                        icon={TrendingUp}
-                                        color="warning"
-                                    />
-                                    <KPICard
-                                        title="Remaining"
-                                        value={balancesReport.data.statistics.totals.totalRemaining}
-                                        subtitle="days available"
-                                        icon={PieChart}
-                                        color="success"
-                                    />
-                                    <KPICard
-                                        title="Utilization"
-                                        value={`${balancesReport.data.statistics.averages.utilizationPercent}%`}
-                                        icon={BarChart3}
-                                        color={balancesReport.data.statistics.averages.utilizationPercent > 80 ? "danger" : balancesReport.data.statistics.averages.utilizationPercent > 50 ? "warning" : "success"}
-                                    />
-                                </div>
-
-                                {/* Charts Row */}
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                    {/* Area Chart - Balance Overview */}
+                                {/* Leave Requests Details Table */}
+                                {Array.isArray(leaveRequestsReport.data.details) && leaveRequestsReport.data.details.length > 0 && (
                                     <Card className="bg-content1 border border-zinc-200 dark:border-zinc-800">
                                         <CardHeader className="pb-0">
                                             <div className="flex items-center justify-between w-full">
                                                 <div className="flex items-center gap-2">
-                                                    <BarChart3 className="size-5 text-primary" />
-                                                    <h3 className="font-semibold">Balance Overview</h3>
+                                                    <FileText className="size-5 text-primary" />
+                                                    <h3 className="font-semibold">Leave Requests Details</h3>
+                                                    <Chip size="sm" variant="flat" color="default">
+                                                        {leaveRequestsReport.data.details.length} records
+                                                    </Chip>
                                                 </div>
                                                 <Button
                                                     size="sm"
                                                     color="warning"
                                                     variant="flat"
                                                     startContent={<Download className="size-4" />}
-                                                    onPress={() => handleExport("leave-balances")}
+                                                    onPress={() => handleExport("leave-requests")}
                                                     isLoading={isExporting}
                                                 >
-                                                    Export
+                                                    Export CSV
                                                 </Button>
                                             </div>
                                         </CardHeader>
-                                        <CardBody>
-                                            <div className="h-[300px]">
-                                                <ResponsiveContainer width="100%" height="100%">
-                                                    <AreaChart
-                                                        data={Object.entries(balancesReport.data.statistics.byLeaveType || {}).map(([type, data]: [string, any]) => ({
-                                                            type: type.charAt(0).toUpperCase() + type.slice(1),
-                                                            allocated: data.totalAllocated || 0,
-                                                            used: data.totalUsed || 0,
-                                                            remaining: data.totalRemaining || 0,
-                                                        }))}
-                                                    >
-                                                        <defs>
-                                                            <linearGradient id="colorAllocated" x1="0" y1="0" x2="0" y2="1">
-                                                                <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} />
-                                                                <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
-                                                            </linearGradient>
-                                                            <linearGradient id="colorUsed" x1="0" y1="0" x2="0" y2="1">
-                                                                <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.3} />
-                                                                <stop offset="95%" stopColor="#F59E0B" stopOpacity={0} />
-                                                            </linearGradient>
-                                                        </defs>
-                                                        <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
-                                                        <XAxis dataKey="type" tick={{ fontSize: 12 }} stroke="#9CA3AF" />
-                                                        <YAxis tick={{ fontSize: 12 }} stroke="#9CA3AF" />
-                                                        <RechartsTooltip content={<CustomTooltip />} />
-                                                        <Area type="monotone" dataKey="allocated" name="Allocated" stroke="#3B82F6" fillOpacity={1} fill="url(#colorAllocated)" />
-                                                        <Area type="monotone" dataKey="used" name="Used" stroke="#F59E0B" fillOpacity={1} fill="url(#colorUsed)" />
-                                                    </AreaChart>
-                                                </ResponsiveContainer>
-                                            </div>
+                                        <CardBody className="overflow-x-auto">
+                                            <Table
+                                                aria-label="Leave requests details"
+                                                classNames={{
+                                                    base: "max-h-[500px] overflow-y-auto",
+                                                    wrapper: "bg-transparent shadow-none",
+                                                    td: "text-sm",
+                                                    thead: "sticky top-0 z-10",
+                                                    th: "dark:bg-zinc-900 bg-zinc-100 text-xs uppercase",
+                                                }}
+                                            >
+                                                <TableHeader>
+                                                    <TableColumn>Staff</TableColumn>
+                                                    <TableColumn>Department</TableColumn>
+                                                    <TableColumn>Leave Type</TableColumn>
+                                                    <TableColumn>Start Date</TableColumn>
+                                                    <TableColumn>End Date</TableColumn>
+                                                    <TableColumn>Days</TableColumn>
+                                                    <TableColumn>Status</TableColumn>
+                                                    <TableColumn>Reason</TableColumn>
+                                                </TableHeader>
+                                                <TableBody>
+                                                    {leaveRequestsReport.data.details.map((request: any) => (
+                                                        <TableRow key={request._id}>
+                                                            <TableCell>
+                                                                <div className="flex flex-col">
+                                                                    <span className="font-medium text-sm">{request.staff?.name}</span>
+                                                                    <span className="text-xs text-zinc-500">{request.staff?.staffId}</span>
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm">{request.department?.name || "—"}</span>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <LeaveTypeChip type={request.leaveType} />
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm whitespace-nowrap">
+                                                                    {DateTime.fromISO(request.startDate).toFormat("dd MMM yyyy")}
+                                                                </span>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm whitespace-nowrap">
+                                                                    {DateTime.fromISO(request.endDate).toFormat("dd MMM yyyy")}
+                                                                </span>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm font-medium">{request.workingDays}</span>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <LeaveStatusChip status={request.status} />
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <span className="text-sm text-zinc-500 max-w-[200px] truncate block">
+                                                                    {request.reason || "—"}
+                                                                </span>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    ))}
+                                                </TableBody>
+                                            </Table>
                                         </CardBody>
                                     </Card>
+                                )}
 
-                                    {/* Utilization by Type */}
-                                    <Card className="bg-content1 border border-zinc-200 dark:border-zinc-800">
-                                        <CardHeader className="pb-0">
-                                            <div className="flex items-center gap-2">
-                                                <TrendingUp className="size-5 text-success" />
-                                                <h3 className="font-semibold">Utilization by Type</h3>
-                                            </div>
-                                        </CardHeader>
-                                        <CardBody>
-                                            <div className="space-y-4">
-                                                {Object.entries(balancesReport.data.statistics.byLeaveType || {}).map(([type, data]: [string, any]) => (
-                                                    <div key={type} className="space-y-2">
-                                                        <div className="flex items-center justify-between">
-                                                            <div className="flex items-center gap-2">
-                                                                <div className="size-3 rounded-full" style={{ backgroundColor: LEAVE_TYPE_COLORS[type] || "#6B7280" }} />
-                                                                <span className="text-sm font-medium capitalize">{type}</span>
-                                                            </div>
-                                                            <span className="text-sm font-semibold">{data.avgUtilization || 0}%</span>
-                                                        </div>
-                                                        <Progress
-                                                            value={data.avgUtilization || 0}
-                                                            size="sm"
-                                                            color={data.avgUtilization > 80 ? "danger" : data.avgUtilization > 50 ? "warning" : "primary"}
-                                                            classNames={{ track: "bg-zinc-200 dark:bg-zinc-700" }}
-                                                        />
-                                                        <div className="flex justify-between text-xs text-zinc-500">
-                                                            <span>Used: {data.totalUsed || 0}</span>
-                                                            <span>Allocated: {data.totalAllocated || 0}</span>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </CardBody>
-                                    </Card>
-                                </div>
-
-                                {/* Low Balance Alerts */}
-                                {balancesReport.data.statistics.lowBalance?.length > 0 && (
+                                {/* Note when details exceed limit */}
+                                {typeof leaveRequestsReport.data.details === "string" && (
                                     <Card className="border border-warning-200 dark:border-warning-800 bg-warning-50 dark:bg-warning-900/10">
-                                        <CardHeader className="pb-0">
-                                            <div className="flex items-center gap-2">
-                                                <AlertTriangle className="size-5 text-warning-600" />
-                                                <h3 className="font-semibold text-warning-700 dark:text-warning-400">
-                                                    Low Balance Alerts ({balancesReport.data.statistics.lowBalance.length})
-                                                </h3>
-                                            </div>
-                                        </CardHeader>
-                                        <CardBody>
-                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                                                {balancesReport.data.statistics.lowBalance.slice(0, 8).map((item: any, i: number) => (
-                                                    <div key={i} className="flex items-center justify-between p-3 bg-white dark:bg-zinc-900 rounded-lg">
-                                                        <div>
-                                                            <p className="text-sm font-medium">{item.staff.name}</p>
-                                                            <p className="text-xs text-zinc-500 capitalize">{item.leaveType}</p>
-                                                        </div>
-                                                        <Chip size="sm" color="danger" variant="flat">{item.remaining} left</Chip>
-                                                    </div>
-                                                ))}
+                                        <CardBody className="p-4">
+                                            <div className="flex items-center gap-3">
+                                                <AlertTriangle className="size-5 text-warning-600 flex-shrink-0" />
+                                                <div className="flex-1">
+                                                    <p className="text-sm text-warning-700 dark:text-warning-400">
+                                                        Too many records to display in table. Use the Export CSV button to download the full dataset.
+                                                    </p>
+                                                </div>
+                                                <Button
+                                                    size="sm"
+                                                    color="warning"
+                                                    variant="flat"
+                                                    startContent={<Download className="size-4" />}
+                                                    onPress={() => handleExport("leave-requests")}
+                                                    isLoading={isExporting}
+                                                >
+                                                    Export CSV
+                                                </Button>
                                             </div>
                                         </CardBody>
                                     </Card>
                                 )}
                             </div>
                         ) : (
-                            <EmptyState icon={PieChart} message="No balance data available" />
+                            <EmptyState icon={FileText} message="No leave request data available" />
+                        )}
+                    </Tab>
+
+                    {/* Annual Leave Balances Report */}
+                    <Tab
+                        key="balances"
+                        title={
+                            <div className="flex items-center gap-2">
+                                <PieChart className="size-4" />
+                                <span>Annual Leave</span>
+                            </div>
+                        }
+                    >
+                        {balancesLoading ? (
+                            <ReportsSkeleton />
+                        ) : balancesReport?.data?.statistics ? (
+                            (() => {
+                                const annualStats = balancesReport.data.statistics.byLeaveType?.annual
+                                const totalAllocated = annualStats?.totalAllocated || balancesReport.data.statistics.totals.totalAllocated || 0
+                                const totalUsed = annualStats?.totalUsed || balancesReport.data.statistics.totals.totalUsed || 0
+                                const totalRemaining = annualStats?.totalRemaining || balancesReport.data.statistics.totals.totalRemaining || 0
+                                const utilizationPercent = annualStats?.avgUtilization || balancesReport.data.statistics.averages.utilizationPercent || 0
+
+                                // Prepare per-staff data for chart (filter to annual only)
+                                const perStaffData = (balancesReport.data.perStaffPerType || [])
+                                    .filter((r: any) => r.leaveType === "annual")
+                                    .map((r: any) => ({
+                                        ...r,
+                                        computedRemaining: (r.accrued || 0) - (r.used || 0),
+                                        computedAvailable: (r.total || 0) - (r.used || 0),
+                                    }))
+                                    .sort((a: any, b: any) => b.used - a.used)
+
+                                return (
+                                    <div className="space-y-6">
+                                        {/* KPI Cards */}
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                            <KPICard
+                                                title="Total Allocated"
+                                                value={totalAllocated}
+                                                subtitle="annual leave days"
+                                                icon={Calendar}
+                                                color="primary"
+                                            />
+                                            <KPICard
+                                                title="Total Used"
+                                                value={totalUsed}
+                                                subtitle="days consumed"
+                                                icon={TrendingUp}
+                                                color="warning"
+                                            />
+                                            <KPICard
+                                                title="Remaining"
+                                                value={totalRemaining}
+                                                subtitle="days available"
+                                                icon={PieChart}
+                                                color="success"
+                                            />
+                                            <KPICard
+                                                title="Utilization"
+                                                value={`${utilizationPercent}%`}
+                                                icon={BarChart3}
+                                                color={utilizationPercent > 80 ? "danger" : utilizationPercent > 50 ? "warning" : "primary"}
+                                            />
+                                        </div>
+
+                                        {/* Charts Row */}
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                            {/* Area Chart - Per Staff Overview */}
+                                            <Card className="bg-content1 border border-zinc-200 dark:border-zinc-800">
+                                                <CardHeader className="pb-0">
+                                                    <div className="flex items-center justify-between w-full">
+                                                        <div className="flex items-center gap-2">
+                                                            <TrendingUp className="size-5 text-primary" />
+                                                            <h3 className="font-semibold">Annual Leave Overview</h3>
+                                                        </div>
+                                                        <Button
+                                                            size="sm"
+                                                            color="warning"
+                                                            variant="flat"
+                                                            startContent={<Download className="size-4" />}
+                                                            onPress={() => handleExport("leave-balances")}
+                                                            isLoading={isExporting}
+                                                        >
+                                                            Export
+                                                        </Button>
+                                                    </div>
+                                                </CardHeader>
+                                                <CardBody>
+                                                    <div className="h-[320px]">
+                                                        <ResponsiveContainer width="100%" height="100%">
+                                                            <AreaChart
+                                                                data={perStaffData.slice(0, 15).map((r: any) => ({
+                                                                    name: r.staff?.name?.split(" ").slice(0, 2).join(" ") || "—",
+                                                                    allocated: r.total || 0,
+                                                                    accrued: r.accrued || 0,
+                                                                    used: r.used || 0,
+                                                                }))}
+                                                                margin={{ top: 10, right: 30, left: 0, bottom: 60 }}
+                                                            >
+                                                                <defs>
+                                                                    <linearGradient id="balAllocated" x1="0" y1="0" x2="0" y2="1">
+                                                                        <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.3} />
+                                                                        <stop offset="95%" stopColor="#3B82F6" stopOpacity={0} />
+                                                                    </linearGradient>
+                                                                    <linearGradient id="balAccrued" x1="0" y1="0" x2="0" y2="1">
+                                                                        <stop offset="5%" stopColor="#22C55E" stopOpacity={0.3} />
+                                                                        <stop offset="95%" stopColor="#22C55E" stopOpacity={0} />
+                                                                    </linearGradient>
+                                                                    <linearGradient id="balUsed" x1="0" y1="0" x2="0" y2="1">
+                                                                        <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.3} />
+                                                                        <stop offset="95%" stopColor="#F59E0B" stopOpacity={0} />
+                                                                    </linearGradient>
+                                                                </defs>
+                                                                <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
+                                                                <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="#9CA3AF" angle={-45} textAnchor="end" />
+                                                                <YAxis tick={{ fontSize: 12 }} stroke="#9CA3AF" />
+                                                                <RechartsTooltip content={<CustomTooltip />} />
+                                                                <Legend verticalAlign="top" height={36} />
+                                                                <Area type="monotone" dataKey="allocated" name="Allocated" stroke="#3B82F6" fillOpacity={1} fill="url(#balAllocated)" />
+                                                                <Area type="monotone" dataKey="accrued" name="Accrued" stroke="#22C55E" fillOpacity={1} fill="url(#balAccrued)" />
+                                                                <Area type="monotone" dataKey="used" name="Used" stroke="#F59E0B" fillOpacity={1} fill="url(#balUsed)" />
+                                                            </AreaChart>
+                                                        </ResponsiveContainer>
+                                                    </div>
+                                                </CardBody>
+                                            </Card>
+
+                                            {/* Bar Chart - Remaining & Available per Staff */}
+                                            <Card className="bg-content1 border border-zinc-200 dark:border-zinc-800">
+                                                <CardHeader className="pb-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <BarChart3 className="size-5 text-primary" />
+                                                        <h3 className="font-semibold">Remaining & Available per Staff</h3>
+                                                    </div>
+                                                </CardHeader>
+                                                <CardBody>
+                                                    <div className="h-[320px]">
+                                                        <ResponsiveContainer width="100%" height="100%">
+                                                            <BarChart
+                                                                data={perStaffData.slice(0, 15).map((r: any) => ({
+                                                                    name: r.staff?.name?.split(" ").slice(0, 2).join(" ") || "—",
+                                                                    remaining: r.computedRemaining,
+                                                                    available: r.computedAvailable,
+                                                                }))}
+                                                                margin={{ top: 20, right: 30, left: 0, bottom: 60 }}
+                                                            >
+                                                                <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
+                                                                <XAxis dataKey="name" tick={{ fontSize: 10 }} stroke="#9CA3AF" angle={-45} textAnchor="end" />
+                                                                <YAxis tick={{ fontSize: 12 }} stroke="#9CA3AF" />
+                                                                <RechartsTooltip content={<CustomTooltip />} />
+                                                                <Legend verticalAlign="top" height={36} />
+                                                                <Bar dataKey="remaining" name="Remaining (Accrued − Used)" fill="#22C55E" radius={[4, 4, 0, 0]} />
+                                                                <Bar dataKey="available" name="Available (Allocated − Used)" fill="#3B82F6" radius={[4, 4, 0, 0]} />
+                                                            </BarChart>
+                                                        </ResponsiveContainer>
+                                                    </div>
+                                                </CardBody>
+                                            </Card>
+                                        </div>
+
+                                        {/* Low Balance Alerts */}
+                                        {balancesReport.data.statistics.lowBalance?.length > 0 && (
+                                            <Card className="border border-warning-200 dark:border-warning-800 bg-warning-50 dark:bg-warning-900/10">
+                                                <CardHeader className="pb-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <AlertTriangle className="size-5 text-warning-600" />
+                                                        <h3 className="font-semibold text-warning-700 dark:text-warning-400">
+                                                            Low Annual Leave Balance ({balancesReport.data.statistics.lowBalance.length})
+                                                        </h3>
+                                                    </div>
+                                                </CardHeader>
+                                                <CardBody>
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                                                        {balancesReport.data.statistics.lowBalance.slice(0, 8).map((item: any, i: number) => (
+                                                            <div key={i} className="flex items-center justify-between p-3 bg-white dark:bg-zinc-900 rounded-lg">
+                                                                <div>
+                                                                    <p className="text-sm font-medium">{item.staff.name}</p>
+                                                                    <p className="text-xs text-zinc-500">{item.staff.department || "—"}</p>
+                                                                </div>
+                                                                <Chip size="sm" color="danger" variant="flat">{item.remaining}d left</Chip>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </CardBody>
+                                            </Card>
+                                        )}
+
+                                        {/* Annual Leave Balances Table */}
+                                        {perStaffData.length > 0 && (
+                                            <Card className="bg-content1 border border-zinc-200 dark:border-zinc-800">
+                                                <CardHeader className="pb-0">
+                                                    <div className="flex items-center justify-between w-full">
+                                                        <div className="flex items-center gap-2">
+                                                            <FileText className="size-5 text-primary" />
+                                                            <h3 className="font-semibold">Annual Leave Balances</h3>
+                                                            <Chip size="sm" variant="flat" color="default">
+                                                                {perStaffData.length} staff
+                                                            </Chip>
+                                                        </div>
+                                                        <Button
+                                                            size="sm"
+                                                            color="warning"
+                                                            variant="flat"
+                                                            startContent={<Download className="size-4" />}
+                                                            onPress={() => handleExport("leave-balances")}
+                                                            isLoading={isExporting}
+                                                        >
+                                                            Export CSV
+                                                        </Button>
+                                                    </div>
+                                                </CardHeader>
+                                                <CardBody className="overflow-x-auto">
+                                                    <Table
+                                                        aria-label="Annual leave balances"
+                                                        classNames={{
+                                                            base: "max-h-[500px] overflow-y-auto",
+                                                            wrapper: "bg-transparent shadow-none",
+                                                            td: "text-sm",
+                                                            thead: "sticky top-0 z-10",
+                                                            th: "dark:bg-zinc-900 bg-zinc-100 text-xs uppercase",
+                                                        }}
+                                                    >
+                                                        <TableHeader>
+                                                            <TableColumn>Staff</TableColumn>
+                                                            <TableColumn>Department</TableColumn>
+                                                            <TableColumn>Allocated</TableColumn>
+                                                            <TableColumn>Accrued</TableColumn>
+                                                            <TableColumn>Used</TableColumn>
+                                                            <TableColumn>Remaining</TableColumn>
+                                                            <TableColumn>Available</TableColumn>
+                                                            <TableColumn>Utilization</TableColumn>
+                                                        </TableHeader>
+                                                        <TableBody>
+                                                            {perStaffData.map((record: any, i: number) => (
+                                                                <TableRow key={record.staff?.id || i}>
+                                                                    <TableCell>
+                                                                        <div className="flex flex-col">
+                                                                            <span className="font-medium text-sm">{record.staff?.name}</span>
+                                                                            <span className="text-xs text-zinc-500">{record.staff?.staffId}</span>
+                                                                        </div>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <span className="text-sm">{record.staff?.department || "—"}</span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <span className="text-sm font-medium">{record.total}</span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <span className="text-sm font-medium text-blue-600 dark:text-blue-400">{record.accrued || 0}</span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{record.used}</span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <span className="text-sm font-medium text-green-600 dark:text-green-400">{record.computedRemaining}</span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <span className="text-sm font-medium">{record.computedAvailable}</span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <div className="flex items-center gap-2">
+                                                                            <Progress
+                                                                                value={record.utilizationPercent || 0}
+                                                                                size="sm"
+                                                                                className="max-w-[80px]"
+                                                                                color={record.utilizationPercent > 80 ? "danger" : record.utilizationPercent > 50 ? "warning" : "primary"}
+                                                                                classNames={{ track: "bg-zinc-200 dark:bg-zinc-700" }}
+                                                                            />
+                                                                            <span className="text-xs font-medium whitespace-nowrap">{record.utilizationPercent}%</span>
+                                                                        </div>
+                                                                    </TableCell>
+                                                                </TableRow>
+                                                            ))}
+                                                        </TableBody>
+                                                    </Table>
+                                                </CardBody>
+                                            </Card>
+                                        )}
+                                    </div>
+                                )
+                            })()
+                        ) : (
+                            <EmptyState icon={PieChart} message="No annual leave balance data available" />
                         )}
                     </Tab>
 

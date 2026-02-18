@@ -436,6 +436,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         return redirect("/")
     }
     const sessionData = await getSessionData(request)
+    
+    // Check if user has permission to access AI assistant
+    // By default, all authenticated users (STAFF, HR, ADMIN, MANAGER) can access AI assistant
+    const allowedPermissions = process.env.AI_ASSISTANT_PERMISSIONS?.split(",") || ["STAFF", "HR", "ADMIN", "MANAGER"]
+    const hasPermission = sessionData?.user?.permissions?.some(permission => 
+        allowedPermissions.includes(permission.trim().toUpperCase())
+    )
+    
+    if (!hasPermission) {
+        throw new Response(
+            "You don't have permission to access the AI Assistant. This feature is restricted to authorized personnel.",
+            { status: 403 }
+        )
+    }
+    
     const baseUrl = process.env.BASE_URL as string
     return { sessionData, baseUrl }
 }

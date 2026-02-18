@@ -39,6 +39,7 @@ import { DataTable } from "~/ui/components/data-table"
 import useSWR from "swr"
 import { DateTime } from "luxon"
 import { fetcher } from "~/ui/lib/fetcher"
+import { exportData, formatters, ExportFormat } from "~/ui/lib/export-utils"
 import { LeaveStatus } from "~/utils/types"
 import {
     CalendarDays,
@@ -52,6 +53,7 @@ import {
     FileText,
     Trash2,
     AlertTriangle,
+    Download,
 } from "lucide-react"
 import { MobileList } from "~/ui/components/lists"
 import { LeaveTypeChip, LeaveStatusChip } from "~/ui/components/chips"
@@ -97,6 +99,7 @@ export default function CallIns() {
 
     // Selected call-in for view
     const [selectedCallIn, setSelectedCallIn] = useState<any>(null)
+    const [selectedExportFormat, setSelectedExportFormat] = useState<ExportFormat>("csv")
 
     // Form state for create
     const [formData, setFormData] = useState({
@@ -304,6 +307,44 @@ export default function CallIns() {
         return hoursSinceCreation <= 48
     }
 
+    // Handle export call-ins data
+    const handleExportCallIns = () => {
+        if (!callInsData?.data?.callIns || callInsData.data.callIns.length === 0) {
+            addToast({
+                color: "warning",
+                title: "No Data",
+                description: "No call-in data available to export",
+            })
+            return
+        }
+
+        const exportColumns = [
+            { key: "staff.name", label: "Staff Name", formatter: formatters.staffName },
+            { key: "staff.staffId", label: "Staff ID" },
+            { key: "leaveRequest.leaveType", label: "Original Leave Type" },
+            { key: "leaveRequest.startDate", label: "Original Leave Start", formatter: formatters.date },
+            { key: "leaveRequest.endDate", label: "Original Leave End", formatter: formatters.date },
+            { key: "callInStartDate", label: "Call-In Start", formatter: formatters.date },
+            { key: "callInEndDate", label: "Call-In End", formatter: formatters.date },
+            { key: "workingDaysRecovered", label: "Days Recovered" },
+            { key: "reason", label: "Reason" },
+            { key: "createdAt", label: "Created At", formatter: formatters.dateTime },
+        ]
+
+        exportData(
+            callInsData.data.callIns,
+            exportColumns,
+            selectedExportFormat,
+            `call-ins-export-${DateTime.now().toFormat("yyyy-MM-dd_HH-mm-ss")}`
+        )
+
+        addToast({
+            color: "success",
+            title: "Export Complete",
+            description: `Call-ins data exported successfully as ${selectedExportFormat.toUpperCase()}`,
+        })
+    }
+
     return (
         <AppLayout user={sessionData?.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-6 pb-8'>
@@ -315,16 +356,41 @@ export default function CallIns() {
                             Recall staff from approved leave when needed
                         </p>
                     </div>
-                    {canCreateCallIn && (
-                        <Button
-                            color='warning'
+                    <div className='flex items-center gap-2'>
+                        {canCreateCallIn && (
+                            <Button
+                                color='warning'
+                                size='sm'
+                                startContent={<PhoneCall className='size-4' />}
+                                onPress={createDisclosure.onOpen}
+                            >
+                                New Call-In
+                            </Button>
+                        )}
+                        <Select
                             size='sm'
-                            startContent={<PhoneCall className='size-4' />}
-                            onPress={createDisclosure.onOpen}
+                            radius='sm'
+                            variant='bordered'
+                            className='w-24'
+                            selectedKeys={[selectedExportFormat]}
+                            aria-label='Export Format'
+                            onSelectionChange={(keys) => setSelectedExportFormat(Array.from(keys)[0] as ExportFormat)}
                         >
-                            New Call-In
+                            <SelectItem key='csv'>CSV</SelectItem>
+                            <SelectItem key='excel'>Excel</SelectItem>
+                            <SelectItem key='pdf'>PDF</SelectItem>
+                        </Select>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            startContent={<Download className='size-4' />}
+                            onPress={handleExportCallIns}
+                            isDisabled={isLoading || !callInsData?.data?.callIns?.length}
+                        >
+                            Export
                         </Button>
-                    )}
+                    </div>
                 </div>
 
                 {/* Staff Currently on Leave Summary */}

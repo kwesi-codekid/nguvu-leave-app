@@ -187,6 +187,10 @@ const LeaveRequestSchema = new Schema<ILeaveRequest>(
             ref: "Staff",
             index: true,
         },
+        delegatedBy: {
+            type: Schema.Types.ObjectId,
+            ref: "Staff",
+        },
     },
     {
         timestamps: true,

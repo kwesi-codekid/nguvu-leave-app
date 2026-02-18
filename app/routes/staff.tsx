@@ -46,19 +46,24 @@ import { LoaderFunctionArgs } from "react-router"
 import { SearchInput } from "~/ui/components/inputs"
 import { DataTable } from "~/ui/components/data-table"
 import { DepartmentInterface, StaffInterface } from "~/utils/types"
+import { DateTime } from "luxon"
 import {
     Building2,
-    Calendar,
-    CheckCircle2,
     Eye,
-    Mail,
     Pencil,
-    Phone,
-    Shield,
+    Plus,
+    Search,
     Trash2,
     User,
-    UserCircle,
     Users,
+    X,
+    Download,
+    Calendar,
+    CheckCircle2,
+    Mail,
+    Phone,
+    Shield,
+    UserCircle,
     XCircle,
     Hash,
     MapPin,
@@ -67,6 +72,8 @@ import {
 import { GenderChip } from "~/ui/components/chips"
 import { StaffAvatar } from "~/ui/components/avatars"
 import { MobileList } from "~/ui/components/lists"
+import { exportData, formatters, ExportFormat } from "~/ui/lib/export-utils"
+import { ProfileImageUpload } from "~/ui/components/profile-image-upload"
 
 // Permission options
 const PERMISSION_OPTIONS = [
@@ -74,6 +81,7 @@ const PERMISSION_OPTIONS = [
     { value: "MANAGER", label: "Manager", description: "Can manage team members" },
     { value: "HR", label: "HR", description: "Human resources access" },
     { value: "ADMIN", label: "Admin", description: "Full system access" },
+    { value: "DELEGATE", label: "Delegate", description: "Can request leave on behalf of department members" },
 ]
 
 // Gender options
@@ -113,6 +121,9 @@ export default function Staff() {
     const [selectedStaff, setSelectedStaff] = useState<StaffInterface | null>(
         null
     )
+
+    // Selected export format
+    const [selectedExportFormat, setSelectedExportFormat] = useState<ExportFormat>("csv")
 
     // Form state for create
     const [formData, setFormData] = useState({
@@ -239,6 +250,38 @@ export default function Staff() {
     const handleSubmitEdit = async (onClose: () => void) => {
         if (!selectedStaff || !editFormData.name.trim()) return
 
+        // Client-side validation
+        const validationErrors = []
+        
+        if (!editFormData.name.trim()) {
+            validationErrors.push("Name is required")
+        }
+        
+        if (!editFormData.phone.trim()) {
+            validationErrors.push("Phone number is required")
+        }
+        
+        if (!editFormData.department) {
+            validationErrors.push("Department is required")
+        }
+        
+        if (!editFormData.gender) {
+            validationErrors.push("Gender is required")
+        }
+        
+        if (editFormData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editFormData.email)) {
+            validationErrors.push("Invalid email format")
+        }
+
+        if (validationErrors.length > 0) {
+            addToast({
+                color: "danger",
+                title: "Validation Error",
+                description: validationErrors.join(", "),
+            })
+            return
+        }
+
         setIsSubmitting(true)
         try {
             await axios.put(
@@ -286,11 +329,28 @@ export default function Staff() {
             })
         } catch (error: any) {
             console.error("Error updating staff:", error)
+            
+            // Handle validation errors specifically
+            let errorMessage = "Failed to update staff member"
+            if (error.response?.status === 422) {
+                if (error.response?.data?.errors) {
+                    const errors = error.response.data.errors
+                    if (Array.isArray(errors)) {
+                        errorMessage = errors.map((err: any) => err.message).join(", ")
+                    } else {
+                        errorMessage = error.response.data.message || "Validation failed"
+                    }
+                } else {
+                    errorMessage = error.response?.data?.message || "Validation failed"
+                }
+            } else if (error.response?.data?.message) {
+                errorMessage = error.response.data.message
+            }
+            
             addToast({
                 color: "danger",
                 title: "Error",
-                description:
-                    error.response?.data?.message || "Failed to update staff member",
+                description: errorMessage,
             })
         } finally {
             setIsSubmitting(false)
@@ -348,6 +408,42 @@ export default function Staff() {
         }
     }
 
+    // Handle export staff data
+    const handleExportStaff = () => {
+        if (!data?.data?.staff || data.data.staff.length === 0) {
+            addToast({
+                color: "warning",
+                title: "No Data",
+                description: "No staff data available to export",
+            })
+            return
+        }
+
+        const exportColumns = [
+            { key: "staffId", label: "Staff ID" },
+            { key: "name", label: "Name" },
+            { key: "phone", label: "Phone" },
+            { key: "email", label: "Email" },
+            { key: "gender", label: "Gender" },
+            { key: "department.name", label: "Department", formatter: formatters.department },
+            { key: "status", label: "Status" },
+            { key: "permissions", label: "Permissions", formatter: formatters.array },
+        ]
+
+        exportData(
+            data.data.staff,
+            exportColumns,
+            selectedExportFormat,
+            `staff-export-${DateTime.now().toFormat("yyyy-MM-dd_HH-mm-ss")}`
+        )
+
+        addToast({
+            color: "success",
+            title: "Export Complete",
+            description: `Staff data exported successfully as ${selectedExportFormat.toUpperCase()}`,
+        })
+    }
+
     return (
         <AppLayout user={sessionData.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-8 pb-8'>
@@ -359,7 +455,30 @@ export default function Staff() {
                             View, create and manage staff members
                         </p>
                     </div>
-                    <div>
+                    <div className='flex items-center gap-2'>
+                        <Select
+                            size='sm'
+                            radius='sm'
+                            variant='bordered'
+                            className='w-24'
+                            selectedKeys={[selectedExportFormat]}
+                            aria-label='Export Format'
+                            onSelectionChange={(keys) => setSelectedExportFormat(Array.from(keys)[0] as ExportFormat)}
+                        >
+                            <SelectItem key='csv'>CSV</SelectItem>
+                            <SelectItem key='excel'>Excel</SelectItem>
+                            <SelectItem key='pdf'>PDF</SelectItem>
+                        </Select>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            startContent={<Download className='size-4' />}
+                            onPress={handleExportStaff}
+                            isDisabled={isLoading || !data?.data?.staff?.length}
+                        >
+                            Export
+                        </Button>
                         <Button
                             size='sm'
                             color='warning'
@@ -644,42 +763,12 @@ export default function Staff() {
                                             "border-zinc-200 dark:border-zinc-800",
                                     }}
                                 />
-                                <div className='flex flex-col gap-2'>
-                                    <label className='text-sm font-medium text-foreground-600'>
-                                        Profile Image (Optional)
-                                    </label>
-                                    <input
-                                        type='file'
-                                        accept='image/*'
-                                        onChange={(e) => {
-                                            const file = e.target.files?.[0]
-                                            if (file) {
-                                                // For now, just store the file info
-                                                // In a real implementation, you'd upload to cloud storage
-                                                setFormData({
-                                                    ...formData,
-                                                    profileImage: {
-                                                        url: URL.createObjectURL(file),
-                                                        publicId: file.name,
-                                                        filename: file.name,
-                                                        fileType: file.type,
-                                                        uploadedAt: new Date(),
-                                                    },
-                                                })
-                                            }
-                                        }}
-                                        className='block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer'
-                                    />
-                                    {formData.profileImage && (
-                                        <div className='mt-2'>
-                                            <img
-                                                src={formData.profileImage.url}
-                                                alt='Profile preview'
-                                                className='h-16 w-16 rounded-full object-cover'
-                                            />
-                                        </div>
-                                    )}
-                                </div>
+                                <ProfileImageUpload
+                                    value={formData.profileImage}
+                                    onChange={(image: any) => setFormData({ ...formData, profileImage: image })}
+                                    name={formData.name}
+                                    className="mt-2"
+                                />
                                 <Input
                                     label='Phone Number'
                                     variant='bordered'
@@ -1146,40 +1235,12 @@ export default function Staff() {
                                             "border-zinc-200 dark:border-zinc-800",
                                     }}
                                 />
-                                <div className='flex flex-col gap-2'>
-                                    <label className='text-sm font-medium text-foreground-600'>
-                                        Profile Image (Optional)
-                                    </label>
-                                    <input
-                                        type='file'
-                                        accept='image/*'
-                                        onChange={(e) => {
-                                            const file = e.target.files?.[0]
-                                            if (file) {
-                                                setEditFormData({
-                                                    ...editFormData,
-                                                    profileImage: {
-                                                        url: URL.createObjectURL(file),
-                                                        publicId: file.name,
-                                                        filename: file.name,
-                                                        fileType: file.type,
-                                                        uploadedAt: new Date(),
-                                                    },
-                                                })
-                                            }
-                                        }}
-                                        className='block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer'
-                                    />
-                                    {editFormData.profileImage && (
-                                        <div className='mt-2'>
-                                            <img
-                                                src={editFormData.profileImage.url}
-                                                alt='Profile preview'
-                                                className='h-16 w-16 rounded-full object-cover'
-                                            />
-                                        </div>
-                                    )}
-                                </div>
+                                <ProfileImageUpload
+                                    value={editFormData.profileImage}
+                                    onChange={(image: any) => setEditFormData({ ...editFormData, profileImage: image })}
+                                    name={editFormData.name}
+                                    className="mt-2"
+                                />
                                 <Input
                                     label='Phone Number'
                                     variant='bordered'
@@ -1335,7 +1396,12 @@ export default function Staff() {
                                     color='warning'
                                     onPress={() => handleSubmitEdit(onClose)}
                                     isLoading={isSubmitting}
-                                    isDisabled={!editFormData.name.trim()}
+                                    isDisabled={
+                                        !editFormData.name.trim() ||
+                                        !editFormData.phone.trim() ||
+                                        !editFormData.department ||
+                                        !editFormData.gender
+                                    }
                                 >
                                     Save Changes
                                 </Button>

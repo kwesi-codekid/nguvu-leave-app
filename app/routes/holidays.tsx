@@ -34,6 +34,7 @@ import { DataTable } from "~/ui/components/data-table"
 import useSWR from "swr"
 import { DateTime } from "luxon"
 import { fetcher } from "~/ui/lib/fetcher"
+import { exportData, formatters, ExportFormat } from "~/ui/lib/export-utils"
 import { HolidayInterface, HolidayTypes } from "~/utils/types"
 import {
     Calendar,
@@ -44,6 +45,7 @@ import {
     Eye,
     Pencil,
     Trash2,
+    Download,
 } from "lucide-react"
 import { MobileList } from "~/ui/components/lists"
 import { HolidayChip } from "~/ui/components/chips"
@@ -85,6 +87,7 @@ export default function Holidays() {
     // Selected holiday for view/edit/delete
     const [selectedHoliday, setSelectedHoliday] =
         useState<HolidayInterface | null>(null)
+    const [selectedExportFormat, setSelectedExportFormat] = useState<ExportFormat>("csv")
 
     // Form state for create
     const [formData, setFormData] = useState({
@@ -290,6 +293,39 @@ export default function Holidays() {
         }
     }
 
+    // Handle export holidays data
+    const handleExportHolidays = () => {
+        if (!data?.data?.holidays || data.data.holidays.length === 0) {
+            addToast({
+                color: "warning",
+                title: "No Data",
+                description: "No holiday data available to export",
+            })
+            return
+        }
+
+        const exportColumns = [
+            { key: "name", label: "Holiday Name" },
+            { key: "type", label: "Type" },
+            { key: "startDate", label: "Start Date", formatter: formatters.date },
+            { key: "endDate", label: "End Date", formatter: formatters.date },
+            { key: "description", label: "Description" },
+        ]
+
+        exportData(
+            data.data.holidays,
+            exportColumns,
+            selectedExportFormat,
+            `holidays-${selectedYear}-export-${DateTime.now().toFormat("yyyy-MM-dd_HH-mm-ss")}`
+        )
+
+        addToast({
+            color: "success",
+            title: "Export Complete",
+            description: `Holiday data for ${selectedYear} exported successfully as ${selectedExportFormat.toUpperCase()}`,
+        })
+    }
+
     return (
         <AppLayout user={sessionData?.user} baseUrl={baseUrl} token={sessionData?.token}>
             <div className='flex flex-col gap-8 pb-8'>
@@ -301,13 +337,38 @@ export default function Holidays() {
                             View, create and manage holidays
                         </p>
                     </div>
-                    <Button
-                        color='warning'
-                        size='sm'
-                        onPress={createDisclosure.onOpen}
-                    >
-                        Add Holiday
-                    </Button>
+                    <div className='flex items-center gap-2'>
+                        <Select
+                            size='sm'
+                            radius='sm'
+                            variant='bordered'
+                            className='w-24'
+                            selectedKeys={[selectedExportFormat]}
+                            aria-label='Export Format'
+                            onSelectionChange={(keys) => setSelectedExportFormat(Array.from(keys)[0] as ExportFormat)}
+                        >
+                            <SelectItem key='csv'>CSV</SelectItem>
+                            <SelectItem key='excel'>Excel</SelectItem>
+                            <SelectItem key='pdf'>PDF</SelectItem>
+                        </Select>
+                        <Button
+                            size='sm'
+                            color='primary'
+                            variant='flat'
+                            startContent={<Download className='size-4' />}
+                            onPress={handleExportHolidays}
+                            isDisabled={isLoading || !data?.data?.holidays?.length}
+                        >
+                            Export
+                        </Button>
+                        <Button
+                            color='warning'
+                            size='sm'
+                            onPress={createDisclosure.onOpen}
+                        >
+                            Add Holiday
+                        </Button>
+                    </div>
                 </div>
 
                 {/* holiday list */}
