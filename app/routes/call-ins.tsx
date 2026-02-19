@@ -59,7 +59,7 @@ import { MobileList } from "~/ui/components/lists"
 import { LeaveTypeChip, LeaveStatusChip } from "~/ui/components/chips"
 
 export default function CallIns() {
-    const { sessionData, baseUrl } = useLoaderData<typeof loader>()
+    const { sessionData, baseUrl, isApprover } = useLoaderData<typeof loader>()
     const [searchParams, setSearchParams] = useSearchParams()
 
     // Check permissions
@@ -67,7 +67,7 @@ export default function CallIns() {
         sessionData?.user?.permissions?.includes("HR") ||
         sessionData?.user?.permissions?.includes("ADMIN")
     const isManager = sessionData?.user?.permissions?.includes("MANAGER")
-    const canCreateCallIn = isHrOrAdmin || isManager
+    const canCreateCallIn = isHrOrAdmin || isManager || isApprover
 
     // Fetch call-ins
     const {
@@ -1024,5 +1024,28 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
     const sessionData = await getSessionData(request)
     const baseUrl = process.env.BASE_URL as string
-    return { sessionData, baseUrl }
+
+    // Check if user is an approver (their position is set as approverPosition on any job position)
+    let isApprover = false
+    try {
+        const { connectDB } = await import("~/database/connect")
+        const StaffContract = (await import("~/models/staff-contract.model")).default
+        const JobPosition = (await import("~/models/job-position.model")).default
+        await connectDB()
+
+        const userContract = await StaffContract.findOne({
+            staff: sessionData?.user?._id,
+            status: "active",
+        })
+        if (userContract?.position) {
+            const approverMatch = await JobPosition.findOne({
+                approverPosition: userContract.position,
+            })
+            isApprover = !!approverMatch
+        }
+    } catch (err) {
+        console.error("[CallIns] Error checking approver status:", err)
+    }
+
+    return { sessionData, baseUrl, isApprover }
 }

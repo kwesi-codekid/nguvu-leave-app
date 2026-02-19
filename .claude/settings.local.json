@@ -8,7 +8,9 @@
       "Bash(grep -r \"GEMINI_API_KEY\" .env*)",
       "Bash(findstr:*)",
       "Bash(npx react-router build:*)",
-      "Bash(npx vite build:*)"
+      "Bash(npx vite build:*)",
+      "Bash(npx xlsx-cli \"uploads/HEAD OFFICE LEAVE MASTER SHEET.xlsx\")",
+      "Bash(node:*)"
     ]
   }
 }

@@ -72,6 +72,8 @@ import {
     AlertCircle,
     Paperclip,
     Download,
+    Pencil,
+    Trash2,
 } from "lucide-react"
 import { MobileList } from "~/ui/components/lists"
 import { LeaveStatusChip, LeaveTypeChip } from "~/ui/components/chips"
@@ -183,11 +185,11 @@ export default function LeaveRequests() {
     const [requestMode, setRequestMode] = useState<"self" | "delegated">("self")
     const [delegateForStaff, setDelegateForStaff] = useState<string | null>(null)
 
-    // Fetch department staff for delegation (only when in delegated mode)
-    const userDepartmentId = (sessionData?.user?.department as any)?._id || sessionData?.user?.department
+    // Fetch staff for delegation (server-side search, all active staff)
+    const [delegateStaffSearch, setDelegateStaffSearch] = useState("")
     const { data: deptStaffData } = useSWR(
-        canDelegate && requestMode === "delegated" && userDepartmentId
-            ? `${baseUrl}/staff?op=by-department&departmentId=${encodeURIComponent(userDepartmentId)}`
+        canDelegate && requestMode === "delegated"
+            ? `${baseUrl}/staff?search=${encodeURIComponent(delegateStaffSearch)}`
             : null,
         fetcher(sessionData.token as string)
     )
@@ -200,8 +202,8 @@ export default function LeaveRequests() {
         fetcher(sessionData.token as string)
     )
 
-    // Get department staff list excluding self
-    const departmentStaff = (deptStaffData?.data?.staff || []).filter(
+    // Get staff list excluding self (supports both search and by-department response shapes)
+    const departmentStaff = (deptStaffData?.data?.staff || deptStaffData?.data || []).filter(
         (s: StaffInterface) => s._id !== sessionData?.user?._id
     )
 
@@ -212,6 +214,8 @@ export default function LeaveRequests() {
     const approveDisclosure = useDisclosure()
     const rejectDisclosure = useDisclosure()
     const withdrawDisclosure = useDisclosure()
+    const editDisclosure = useDisclosure()
+    const deleteDisclosure = useDisclosure()
 
     // Selected request for view/actions
     const [selectedRequest, setSelectedRequest] = useState<any>(null)
@@ -908,7 +912,7 @@ export default function LeaveRequests() {
             const op = level === "endorsement" ? "reject-endorsement" : "reject-approval"
             await axios.patch(
                 `${baseUrl}/leave-requests/${selectedRequest._id}?op=${op}`,
-                { comment: actionComment },
+                { reason: actionComment },
                 {
                     headers: {
                         Authorization: `Bearer ${sessionData?.token}`,
@@ -1043,6 +1047,124 @@ export default function LeaveRequests() {
         return isRequestedForUser && withdrawableStatuses.includes(status)
     }
 
+    // Can edit/delete check - owner, creator, or delegator can edit/delete pending requests
+    const canEditOrDelete = (request: any) => {
+        let staffId = null
+        if (request.staff?._id) {
+            staffId = request.staff._id
+        } else if (request.staff?.id) {
+            staffId = request.staff.id
+        } else if (typeof request.staff === 'string') {
+            staffId = request.staff
+        } else if (request.staffId) {
+            staffId = request.staffId
+        }
+
+        const userId = sessionData?.user?._id || sessionData?.user?.id
+        const isOwner = staffId === userId
+        const isCreator = request.createdBy === userId || request.createdBy?._id === userId
+        const isDelegator = request.delegatedBy === userId || request.delegatedBy?._id === userId
+        const status = request.status?.toLowerCase()
+
+        return (isOwner || isCreator || isDelegator) && status === LeaveStatus.PENDING
+    }
+
+    // Handle delete request
+    const handleDeleteRequest = async (onClose: () => void) => {
+        if (!selectedRequest) return
+
+        setIsActioning(true)
+        try {
+            await axios.delete(
+                `${baseUrl}/leave-requests/${selectedRequest._id}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${sessionData?.token}`,
+                    },
+                }
+            )
+
+            await mutateMyRequests()
+            await mutateDelegatedRequests()
+            onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Leave request deleted",
+            })
+        } catch (error: any) {
+            console.error("Error deleting request:", error)
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to delete request",
+            })
+        } finally {
+            setIsActioning(false)
+        }
+    }
+
+    // Handle edit request - opens create drawer prefilled with selected request data
+    const handleEditRequest = (request: any) => {
+        setSelectedRequest(request)
+        setFormData({
+            leaveType: request.leaveType,
+            startDate: request.startDate ? DateTime.fromISO(request.startDate).toFormat("yyyy-MM-dd") : "",
+            endDate: request.endDate ? DateTime.fromISO(request.endDate).toFormat("yyyy-MM-dd") : "",
+            reason: request.reason || "",
+        })
+        editDisclosure.onOpen()
+    }
+
+    // Handle edit submit
+    const handleEditSubmit = async (onClose: () => void) => {
+        if (!selectedRequest) return
+
+        setIsSubmitting(true)
+        try {
+            await axios.put(
+                `${baseUrl}/leave-requests/${selectedRequest._id}`,
+                {
+                    startDate: formData.startDate,
+                    endDate: formData.endDate,
+                    reason: formData.reason,
+                },
+                {
+                    headers: {
+                        Authorization: `Bearer ${sessionData?.token}`,
+                    },
+                }
+            )
+
+            setFormData({
+                leaveType: LeaveTypes.ANNUAL,
+                startDate: "",
+                endDate: "",
+                reason: "",
+            })
+            setSelectedRequest(null)
+            await mutateMyRequests()
+            await mutateDelegatedRequests()
+            onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Leave request updated successfully",
+            })
+        } catch (error: any) {
+            console.error("Error updating request:", error)
+            addToast({
+                color: "danger",
+                title: "Error",
+                description:
+                    error.response?.data?.message || "Failed to update request",
+            })
+        } finally {
+            setIsSubmitting(false)
+        }
+    }
+
     // Render request row for table
     const renderRequestRow = (request: any) => (
         <TableRow key={request._id}>
@@ -1071,6 +1193,35 @@ export default function LeaveRequests() {
                             <Eye className='size-4' />
                         </Button>
                     </Tooltip>
+                    {canEditOrDelete(request) ? (
+                        <>
+                            <Tooltip content='Edit request'>
+                                <Button
+                                    size='sm'
+                                    color='primary'
+                                    variant='flat'
+                                    isIconOnly
+                                    onPress={() => handleEditRequest(request)}
+                                >
+                                    <Pencil className='size-4' />
+                                </Button>
+                            </Tooltip>
+                            <Tooltip content='Delete request'>
+                                <Button
+                                    size='sm'
+                                    color='danger'
+                                    variant='flat'
+                                    isIconOnly
+                                    onPress={() => {
+                                        setSelectedRequest(request)
+                                        deleteDisclosure.onOpen()
+                                    }}
+                                >
+                                    <Trash2 className='size-4' />
+                                </Button>
+                            </Tooltip>
+                        </>
+                    ) : null}
                     {canWithdraw(request) ? (
                         <Tooltip content='Withdraw request'>
                             <Button
@@ -1204,6 +1355,35 @@ export default function LeaveRequests() {
                             <Eye className='size-4' />
                         </Button>
                     </Tooltip>
+                    {canEditOrDelete(request) ? (
+                        <>
+                            <Tooltip content='Edit request'>
+                                <Button
+                                    size='sm'
+                                    color='primary'
+                                    variant='flat'
+                                    isIconOnly
+                                    onPress={() => handleEditRequest(request)}
+                                >
+                                    <Pencil className='size-4' />
+                                </Button>
+                            </Tooltip>
+                            <Tooltip content='Delete request'>
+                                <Button
+                                    size='sm'
+                                    color='danger'
+                                    variant='flat'
+                                    isIconOnly
+                                    onPress={() => {
+                                        setSelectedRequest(request)
+                                        deleteDisclosure.onOpen()
+                                    }}
+                                >
+                                    <Trash2 className='size-4' />
+                                </Button>
+                            </Tooltip>
+                        </>
+                    ) : null}
                     {canWithdrawDelegated(request) ? (
                         <Tooltip content='Withdraw request'>
                             <Button
@@ -1547,6 +1727,33 @@ export default function LeaveRequests() {
                                                 </div>
                                                 <p className='text-sm mt-2'>{formatDateRange(request.startDate, request.endDate)}</p>
                                                 <p className='text-xs text-zinc-500'>{request.workingDays} working day{request.workingDays !== 1 ? "s" : ""}</p>
+                                                {canEditOrDelete(request) && (
+                                                    <div className='mt-3 pt-3 border-t border-zinc-200 dark:border-zinc-700 flex gap-2'>
+                                                        <Button
+                                                            size='sm'
+                                                            color='primary'
+                                                            variant='flat'
+                                                            startContent={<Pencil className='size-4' />}
+                                                            onPress={() => handleEditRequest(request)}
+                                                            className='flex-1'
+                                                        >
+                                                            Edit
+                                                        </Button>
+                                                        <Button
+                                                            size='sm'
+                                                            color='danger'
+                                                            variant='flat'
+                                                            startContent={<Trash2 className='size-4' />}
+                                                            onPress={() => {
+                                                                setSelectedRequest(request)
+                                                                deleteDisclosure.onOpen()
+                                                            }}
+                                                            className='flex-1'
+                                                        >
+                                                            Delete
+                                                        </Button>
+                                                    </div>
+                                                )}
                                                 {canWithdraw(request) && (
                                                     <div className='mt-3 pt-3 border-t border-zinc-200 dark:border-zinc-700'>
                                                         <Button
@@ -2111,12 +2318,13 @@ export default function LeaveRequests() {
                                                     label='Request on behalf of'
                                                     variant='bordered'
                                                     labelPlacement='outside'
-                                                    placeholder='Select a department colleague'
+                                                    placeholder='Search for a staff member'
                                                     isRequired
                                                     selectedKey={delegateForStaff}
                                                     onSelectionChange={(key) =>
                                                         setDelegateForStaff(key as string)
                                                     }
+                                                    onInputChange={(value) => setDelegateStaffSearch(value)}
                                                     startContent={<Users className='size-4 text-zinc-400' />}
                                                     classNames={{
                                                         base: "w-full",
@@ -2596,6 +2804,32 @@ export default function LeaveRequests() {
                                 >
                                     Close
                                 </Button>
+                                {selectedRequest && canEditOrDelete(selectedRequest) && (
+                                    <>
+                                        <Button
+                                            color='primary'
+                                            variant='flat'
+                                            startContent={<Pencil className='size-4' />}
+                                            onPress={() => {
+                                                onClose()
+                                                handleEditRequest(selectedRequest)
+                                            }}
+                                        >
+                                            Edit
+                                        </Button>
+                                        <Button
+                                            color='danger'
+                                            variant='flat'
+                                            startContent={<Trash2 className='size-4' />}
+                                            onPress={() => {
+                                                onClose()
+                                                deleteDisclosure.onOpen()
+                                            }}
+                                        >
+                                            Delete
+                                        </Button>
+                                    </>
+                                )}
                                 {selectedRequest && canWithdraw(selectedRequest) && (
                                     <Button
                                         color='warning'
@@ -2829,6 +3063,111 @@ export default function LeaveRequests() {
                                     isLoading={isActioning}
                                 >
                                     Withdraw
+                                </Button>
+                            </ModalFooter>
+                        </>
+                    )}
+                </ModalContent>
+            </Modal>
+
+            {/* Edit Request Modal */}
+            <Modal
+                isOpen={editDisclosure.isOpen}
+                onOpenChange={editDisclosure.onOpenChange}
+                size='lg'
+                backdrop='blur'
+            >
+                <ModalContent>
+                    {(onClose) => (
+                        <>
+                            <ModalHeader>Edit Leave Request</ModalHeader>
+                            <ModalBody>
+                                <div className='flex flex-col gap-4'>
+                                    <Input
+                                        label='Start Date'
+                                        type='date'
+                                        variant='bordered'
+                                        labelPlacement='outside'
+                                        value={formData.startDate}
+                                        onValueChange={(value) =>
+                                            setFormData({ ...formData, startDate: value })
+                                        }
+                                    />
+                                    <Input
+                                        label='End Date'
+                                        type='date'
+                                        variant='bordered'
+                                        labelPlacement='outside'
+                                        value={formData.endDate}
+                                        onValueChange={(value) =>
+                                            setFormData({ ...formData, endDate: value })
+                                        }
+                                    />
+                                    <Textarea
+                                        label='Reason'
+                                        variant='bordered'
+                                        labelPlacement='outside'
+                                        placeholder='Update your reason...'
+                                        value={formData.reason}
+                                        onValueChange={(value) =>
+                                            setFormData({ ...formData, reason: value })
+                                        }
+                                    />
+                                </div>
+                            </ModalBody>
+                            <ModalFooter>
+                                <Button
+                                    color='default'
+                                    variant='flat'
+                                    onPress={onClose}
+                                    isDisabled={isSubmitting}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    color='primary'
+                                    onPress={() => handleEditSubmit(onClose)}
+                                    isLoading={isSubmitting}
+                                >
+                                    Save Changes
+                                </Button>
+                            </ModalFooter>
+                        </>
+                    )}
+                </ModalContent>
+            </Modal>
+
+            {/* Delete Request Confirmation Modal */}
+            <Modal
+                isOpen={deleteDisclosure.isOpen}
+                onOpenChange={deleteDisclosure.onOpenChange}
+                size='sm'
+                backdrop='blur'
+            >
+                <ModalContent>
+                    {(onClose) => (
+                        <>
+                            <ModalHeader>Delete Leave Request</ModalHeader>
+                            <ModalBody>
+                                <p className='text-sm'>
+                                    Are you sure you want to delete this leave request? This action cannot be undone.
+                                </p>
+                            </ModalBody>
+                            <ModalFooter>
+                                <Button
+                                    color='default'
+                                    variant='flat'
+                                    onPress={onClose}
+                                    isDisabled={isActioning}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    color='danger'
+                                    onPress={() => handleDeleteRequest(onClose)}
+                                    isLoading={isActioning}
+                                >
+                                    Delete
                                 </Button>
                             </ModalFooter>
                         </>

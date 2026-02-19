@@ -235,17 +235,11 @@ export class LeaveRequestController {
                     if (session) await session.abortTransaction()
                     return errorResponseObject("You do not have delegation permission")
                 }
-                // Verify the target staff is in the same department
+                // Verify the target staff exists
                 const targetStaff = await Staff.findById(delegateForStaffId)
                 if (!targetStaff) {
                     if (session) await session.abortTransaction()
                     return errorResponseObject("Target staff member not found")
-                }
-                const delegatorDept = delegator.department?.toString()
-                const targetDept = targetStaff.department?.toString()
-                if (delegatorDept !== targetDept) {
-                    if (session) await session.abortTransaction()
-                    return errorResponseObject("You can only delegate for staff in your own department")
                 }
             }
 
@@ -552,6 +546,43 @@ export class LeaveRequestController {
                 console.error('[LeaveRequest] Failed to send notification:', notifError)
             }
 
+            // Send notification and SMS to the target staff if this is a delegated request
+            if (delegateForStaffId && delegateForStaffId.toString() !== user._id.toString()) {
+                try {
+                    const startDateFormatted2 = new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                    const endDateFormatted2 = new Date(actualEndDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                    await NotificationController.sendNotification({
+                        recipientId: delegateForStaffId,
+                        title: "Leave Request Submitted On Your Behalf",
+                        message: `A ${leaveType} leave request from ${startDateFormatted2} to ${endDateFormatted2} has been submitted on your behalf by ${user.name}.`,
+                        type: "leave_submitted" as any,
+                        link: "/leave-requests",
+                        metadata: {
+                            entityType: "LeaveRequest",
+                            entityId: leaveRequest[0]._id.toString(),
+                            leaveType,
+                            delegatedBy: user._id.toString(),
+                        },
+                    })
+                } catch (notifError) {
+                    console.error('[LeaveRequest] Failed to send delegation target notification:', notifError)
+                }
+
+                // Send SMS to the target staff
+                try {
+                    const targetStaffForSms = await Staff.findById(delegateForStaffId)
+                    if (targetStaffForSms) {
+                        await SMSService.sendGenericNotification(
+                            targetStaffForSms,
+                            "Leave Request Submitted On Your Behalf",
+                            `A ${leaveType} leave request from ${new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} to ${new Date(actualEndDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (${workingDaysResult.total} days) has been submitted on your behalf by ${user.name}. Please review in the system.`
+                        )
+                    }
+                } catch (smsError) {
+                    console.error('[LeaveRequest] Failed to send SMS to delegation target:', smsError)
+                }
+            }
+
             return successResponseObject(
                 "Leave request created successfully",
                 {
@@ -626,11 +657,12 @@ export class LeaveRequestController {
                 }
             }
             
-            if (
-                !staffId || staffId !== user._id.toString() &&
-                !user?.permissions?.includes("HR") &&
-                !user?.permissions?.includes("ADMIN")
-            ) {
+            const isOwner = staffId && staffId === user._id.toString()
+            const isCreator = request.createdBy && request.createdBy.toString() === user._id.toString()
+            const isDelegator = request.delegatedBy && request.delegatedBy.toString() === user._id.toString()
+            const isHrAdmin = user?.permissions?.includes("HR") || user?.permissions?.includes("ADMIN")
+
+            if (!isOwner && !isCreator && !isDelegator && !isHrAdmin) {
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Unauthorized to update this request"
@@ -767,22 +799,23 @@ export class LeaveRequestController {
                         )
 
                     if (workingDaysResult.total === 0) {
-                        await session.abortTransaction()
+                        if (session) await session.abortTransaction()
                         return errorResponseObject(
                             "Selected dates contain no working days"
                         )
                     }
 
                     // Re-check balance (period-based)
-                    const balance = await LeaveBalance.findOne({
+                    const balanceQuery2 = LeaveBalance.findOne({
                         staff: request.staff,
                         leaveType: request.leaveType,
                         periodStart: { $lte: newStartDate },
                         periodEnd: { $gte: newStartDate },
-                    }).session(session)
+                    })
+                    const balance = session ? await balanceQuery2.session(session) : await balanceQuery2
 
                     if (!balance?.canRequest(workingDaysResult.total)) {
-                        await session.abortTransaction()
+                        if (session) await session.abortTransaction()
                         return errorResponseObject(
                             "Insufficient leave balance for new dates"
                         )
@@ -798,7 +831,7 @@ export class LeaveRequestController {
                         )
 
                     if (overlapping.length > 0) {
-                        await session.abortTransaction()
+                        if (session) await session.abortTransaction()
                         return errorResponseObject(
                             "New dates overlap with existing leave requests"
                         )
@@ -850,7 +883,7 @@ export class LeaveRequestController {
                     ).includes(request.leaveType) &&
                     (!attachments || attachments.length === 0)
                 ) {
-                    await session.abortTransaction()
+                    if (session) await session.abortTransaction()
                     return errorResponseObject(
                         `${request.leaveType} leave requires supporting documents`
                     )
@@ -859,21 +892,24 @@ export class LeaveRequestController {
             }
 
             if (Object.keys(updates).length === 0) {
-                await session.abortTransaction()
+                if (session) await session.abortTransaction()
                 return successResponseObject("No changes to update", request)
             }
 
             // Update request
+            const updateOptions: any = { new: true }
+            if (session) updateOptions.session = session
+
             const updatedRequest = await LeaveRequest.findByIdAndUpdate(
                 id,
                 updates,
-                { new: true, session }
+                updateOptions
             )
                 .populate("staff", "name staffId email")
                 .populate("position", "title")
                 .populate("department", "name")
 
-            await session.commitTransaction()
+            if (session) await session.commitTransaction()
 
             // Log to audit
             await AuditLogController.createAuditLog({
@@ -898,11 +934,11 @@ export class LeaveRequestController {
                 updatedRequest
             )
         } catch (error) {
-            await session.abortTransaction()
+            if (session) await session.abortTransaction()
             console.error("Error updating leave request:", error)
             return errorResponseObject("Failed to update leave request")
         } finally {
-            session.endSession()
+            if (session) session.endSession()
         }
     }
 
