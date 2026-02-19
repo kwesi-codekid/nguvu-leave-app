@@ -20,6 +20,18 @@ echo "✅ Trend Analysis - Identify patterns, anomalies, and insights"
 echo "✅ Reporting - Generate comprehensive reports"
 echo ""
 
+```
+POST /api/apps (register app)                              ✅ Implemented
+GET /api/apps                                              ✅ Implemented
+GET /api/apps/:id                                          ✅ Implemented
+PUT /api/apps/:id                                          ✅ Implemented
+DELETE /api/apps/:id (deactivate)                          ✅ Implemented
+POST /api/apps/:id/permissions (add permission)            ✅ Implemented
+PUT /api/apps/:id/permissions/:code                        ✅ Implemented
+DELETE /api/apps/:id/permissions/:code                     ✅ Implemented
+POST /api/apps/:id/roles (add role)                        ✅ Implemented
+PUT /api/apps/:id/roles/:code                              ✅ Implemented
+DELETE /api/apps/:id/roles/:code
 echo "🧪 Test Scenarios for System Navigation:"
 echo "========================================"
 echo ""
