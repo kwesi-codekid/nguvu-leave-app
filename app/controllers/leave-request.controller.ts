@@ -235,17 +235,11 @@ export class LeaveRequestController {
                     if (session) await session.abortTransaction()
                     return errorResponseObject("You do not have delegation permission")
                 }
-                // Verify the target staff is in the same department
+                // Verify the target staff exists
                 const targetStaff = await Staff.findById(delegateForStaffId)
                 if (!targetStaff) {
                     if (session) await session.abortTransaction()
                     return errorResponseObject("Target staff member not found")
-                }
-                const delegatorDept = delegator.department?.toString()
-                const targetDept = targetStaff.department?.toString()
-                if (delegatorDept !== targetDept) {
-                    if (session) await session.abortTransaction()
-                    return errorResponseObject("You can only delegate for staff in your own department")
                 }
             }
 
@@ -552,6 +546,29 @@ export class LeaveRequestController {
                 console.error('[LeaveRequest] Failed to send notification:', notifError)
             }
 
+            // Send notification to the target staff if this is a delegated request
+            if (delegateForStaffId && delegateForStaffId.toString() !== user._id.toString()) {
+                try {
+                    const startDateFormatted2 = new Date(startDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                    const endDateFormatted2 = new Date(actualEndDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                    await NotificationController.sendNotification({
+                        recipientId: delegateForStaffId,
+                        title: "Leave Request Submitted On Your Behalf",
+                        message: `A ${leaveType} leave request from ${startDateFormatted2} to ${endDateFormatted2} has been submitted on your behalf by ${user.name}.`,
+                        type: "leave_submitted" as any,
+                        link: "/leave-requests",
+                        metadata: {
+                            entityType: "LeaveRequest",
+                            entityId: leaveRequest[0]._id.toString(),
+                            leaveType,
+                            delegatedBy: user._id.toString(),
+                        },
+                    })
+                } catch (notifError) {
+                    console.error('[LeaveRequest] Failed to send delegation target notification:', notifError)
+                }
+            }
+
             return successResponseObject(
                 "Leave request created successfully",
                 {
@@ -626,11 +643,12 @@ export class LeaveRequestController {
                 }
             }
             
-            if (
-                !staffId || staffId !== user._id.toString() &&
-                !user?.permissions?.includes("HR") &&
-                !user?.permissions?.includes("ADMIN")
-            ) {
+            const isOwner = staffId && staffId === user._id.toString()
+            const isCreator = request.createdBy && request.createdBy.toString() === user._id.toString()
+            const isDelegator = request.delegatedBy && request.delegatedBy.toString() === user._id.toString()
+            const isHrAdmin = user?.permissions?.includes("HR") || user?.permissions?.includes("ADMIN")
+
+            if (!isOwner && !isCreator && !isDelegator && !isHrAdmin) {
                 if (session) await session.abortTransaction()
                 return errorResponseObject(
                     "Unauthorized to update this request"

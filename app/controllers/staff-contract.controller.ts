@@ -268,7 +268,7 @@ export class StaffContractController {
         id: string
     ): Promise<ResponseObject> {
         try {
-            const { salary, endDate } = req.body
+            const { salary, endDate, position, startDate, currency, status } = req.body
             const user = (req as any).user
 
             // Check HR/Admin permission
@@ -296,13 +296,10 @@ export class StaffContractController {
                 return errorResponseObject("Contract not found")
             }
 
-            // Prevent updates to terminated/expired contracts
-            if (
-                contract.status === ContractStatus.CANCELLED ||
-                contract.status === ContractStatus.EXPIRED
-            ) {
+            // Prevent updates to cancelled contracts
+            if (contract.status === ContractStatus.CANCELLED) {
                 return errorResponseObject(
-                    `Cannot update ${contract.status.toLowerCase()} contract`
+                    `Cannot update cancelled contract`
                 )
             }
 
@@ -332,6 +329,66 @@ export class StaffContractController {
                 }
             }
 
+            // Position update
+            if (position !== undefined) {
+                const positionId = typeof position === "object" ? position._id : position
+                if (positionId && positionId.toString() !== (contract.position as any)?._id?.toString()) {
+                    const positionExists = await JobPosition.findById(positionId)
+                    if (!positionExists) {
+                        errors.push({
+                            field: "position",
+                            message: "Invalid position specified",
+                        })
+                    } else {
+                        changes.push({
+                            field: "position",
+                            oldValue: (contract.position as any)?._id,
+                            newValue: positionId,
+                            fieldLabel: "Position",
+                        })
+                        updates.position = positionId
+                    }
+                }
+            }
+
+            // Start date update
+            if (startDate !== undefined) {
+                const newStartDate = new Date(startDate)
+                if (isNaN(newStartDate.getTime())) {
+                    errors.push({
+                        field: "startDate",
+                        message: "Invalid start date format",
+                    })
+                } else if (newStartDate.getTime() !== new Date(contract.startDate).getTime()) {
+                    changes.push({
+                        field: "startDate",
+                        oldValue: contract.startDate,
+                        newValue: newStartDate,
+                        fieldLabel: "Start Date",
+                    })
+                    updates.startDate = newStartDate
+                }
+            }
+
+            // Currency update
+            if (currency !== undefined) {
+                const validCurrencies = ["USD", "GHS", "EUR", "GBP"]
+                if (!validCurrencies.includes(currency)) {
+                    errors.push({
+                        field: "currency",
+                        message: `Invalid currency. Must be one of: ${validCurrencies.join(", ")}`,
+                    })
+                } else if (currency !== contract.currency) {
+                    changes.push({
+                        field: "currency",
+                        oldValue: contract.currency,
+                        newValue: currency,
+                        fieldLabel: "Currency",
+                    })
+                    updates.currency = currency
+                }
+            }
+
             // End date extension (only allow extending, not shortening)
             if (endDate !== undefined) {
                 const newEndDate = new Date(endDate)
@@ -352,16 +409,10 @@ export class StaffContractController {
                             message:
                                 "Cannot set end date for permanent contract",
                         })
-                    } else if (newEndDate <= contract.startDate) {
+                    } else if (newEndDate <= (updates.startDate || contract.startDate)) {
                         errors.push({
                             field: "endDate",
                             message: "End date must be after start date",
-                        })
-                    } else if (newEndDate < currentEndDate) {
-                        errors.push({
-                            field: "endDate",
-                            message:
-                                "Cannot shorten contract duration. Only extensions allowed.",
                         })
                     } else if (
                         newEndDate.getTime() !== currentEndDate.getTime()
@@ -373,6 +424,17 @@ export class StaffContractController {
                             fieldLabel: "End Date",
                         })
                         updates.endDate = newEndDate
+
+                        // If contract is expired and new end date is in the future, reactivate it
+                        if (contract.status === ContractStatus.EXPIRED && newEndDate > new Date()) {
+                            updates.status = ContractStatus.ACTIVE
+                            changes.push({
+                                field: "status",
+                                oldValue: contract.status,
+                                newValue: ContractStatus.ACTIVE,
+                                fieldLabel: "Status",
+                            })
+                        }
                     }
                 }
             }

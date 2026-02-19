@@ -322,12 +322,13 @@ export async function action({ request, params }: ActionFunctionArgs) {
                     )
                 }
 
-                // Check ownership or HR/Admin permission
-                if (
-                    leaveRequest.staff.toString() !== user._id.toString() &&
-                    !user.permissions?.includes("HR") &&
-                    !user.permissions?.includes("ADMIN")
-                ) {
+                // Check ownership, delegator, creator, or HR/Admin permission
+                const isStaffOwner = leaveRequest.staff.toString() === user._id.toString()
+                const isCreatedBy = leaveRequest.createdBy && leaveRequest.createdBy.toString() === user._id.toString()
+                const isDelegatedBy = leaveRequest.delegatedBy && leaveRequest.delegatedBy.toString() === user._id.toString()
+                const isHrAdminUser = user.permissions?.includes("HR") || user.permissions?.includes("ADMIN")
+
+                if (!isStaffOwner && !isCreatedBy && !isDelegatedBy && !isHrAdminUser) {
                     return errorResponse(
                         "Unauthorized to delete this request",
                         null,

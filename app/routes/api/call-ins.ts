@@ -5,6 +5,8 @@ import {
 import { connectDB } from "~/database/connect"
 import { CallInController } from "~/controllers/call-in.controller"
 import Staff from "~/models/staff.model"
+import StaffContract from "~/models/staff-contract.model"
+import JobPosition from "~/models/job-position.model"
 import jwt from "jsonwebtoken"
 import {
     successResponse,
@@ -374,11 +376,27 @@ export async function action({ request }: ActionFunctionArgs) {
                 console.log("[CallIn API] Creating call-in with body:", body)
                 console.log("[CallIn API] User:", user?.name, "Permissions:", user?.permissions)
 
-                // Check if user can create call-ins (Manager for dept, HR/Admin for any)
-                const hasPermission =
+                // Check if user can create call-ins (Manager for dept, HR/Admin for any, or Approver)
+                let hasPermission =
                     user?.permissions?.includes("HR") ||
                     user?.permissions?.includes("ADMIN") ||
                     user?.permissions?.includes("MANAGER")
+
+                // Check if user is an approver (their position is set as approverPosition on any job position)
+                if (!hasPermission) {
+                    const userContract = await StaffContract.findOne({
+                        staff: user._id,
+                        status: "active",
+                    })
+                    if (userContract?.position) {
+                        const isApprover = await JobPosition.findOne({
+                            approverPosition: userContract.position,
+                        })
+                        if (isApprover) {
+                            hasPermission = true
+                        }
+                    }
+                }
 
                 if (!hasPermission) {
                     return errorResponse(
