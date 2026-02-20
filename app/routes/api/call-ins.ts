@@ -7,6 +7,7 @@ import { CallInController } from "~/controllers/call-in.controller"
 import Staff from "~/models/staff.model"
 import StaffContract from "~/models/staff-contract.model"
 import JobPosition from "~/models/job-position.model"
+import LeaveRequest from "~/models/leave-request.model"
 import jwt from "jsonwebtoken"
 import {
     successResponse,
@@ -376,31 +377,33 @@ export async function action({ request }: ActionFunctionArgs) {
                 console.log("[CallIn API] Creating call-in with body:", body)
                 console.log("[CallIn API] User:", user?.name, "Permissions:", user?.permissions)
 
-                // Check if user can create call-ins (Manager for dept, HR/Admin for any, or Approver)
+                // Check if user can create call-ins (HR/Admin unrestricted, or position-based approver)
                 let hasPermission =
                     user?.permissions?.includes("HR") ||
-                    user?.permissions?.includes("ADMIN") ||
-                    user?.permissions?.includes("MANAGER")
+                    user?.permissions?.includes("ADMIN")
 
-                // Check if user is an approver (their position is set as approverPosition on any job position)
+                // For non-HR/ADMIN, check position-based approver relationship
                 if (!hasPermission) {
                     const userContract = await StaffContract.findOne({
                         staff: user._id,
                         status: "active",
                     })
                     if (userContract?.position) {
-                        const isApprover = await JobPosition.findOne({
-                            approverPosition: userContract.position,
-                        })
-                        if (isApprover) {
-                            hasPermission = true
+                        // Get the leave request to find the staff's position
+                        const leaveRequest = await LeaveRequest.findById(body.leaveRequestId)
+                        if (leaveRequest) {
+                            const staffPosition = await JobPosition.findById(leaveRequest.position)
+                            // Check if user's position is the approverPosition for the staff's position
+                            if (staffPosition?.approverPosition?.toString() === userContract.position.toString()) {
+                                hasPermission = true
+                            }
                         }
                     }
                 }
 
                 if (!hasPermission) {
                     return errorResponse(
-                        "Unauthorized. Only department heads, HR, or Admin can create call-ins",
+                        "Unauthorized. Only HR, Admin, or position-based approvers can create call-ins",
                         null,
                         403
                     )

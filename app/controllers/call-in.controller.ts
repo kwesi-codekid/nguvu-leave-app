@@ -6,6 +6,7 @@ import LeaveBalance from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import Department from "../models/department.model"
 import StaffContract from "../models/staff-contract.model"
+import JobPosition from "../models/job-position.model"
 import Holiday from "../models/holiday.model"
 import AuditLogController from "./audit-log.controller"
 import NotificationController from "./notification.controller"
@@ -123,7 +124,32 @@ export class CallInController {
                 )
             }
 
-            // Check if requesting user is department head or has permission
+            // Check authorization - HR/Admin unrestricted, or position-based approver
+            const hasHRPermission = user?.permissions?.includes("HR")
+            const hasAdminPermission = user?.permissions?.includes("ADMIN")
+            let hasPermission = hasHRPermission || hasAdminPermission
+
+            if (!hasPermission) {
+                // Check position-based approver relationship
+                const userContract = await StaffContract.findOne({
+                    staff: user._id,
+                    status: "active",
+                })
+                if (userContract?.position) {
+                    const staffPosition = await JobPosition.findById(leaveRequest.position)
+                    if (staffPosition?.approverPosition?.toString() === userContract.position.toString()) {
+                        hasPermission = true
+                    }
+                }
+            }
+
+            if (!hasPermission) {
+                if (session) await session.abortTransaction()
+                return errorResponseObject(
+                    "Only HR, Admin, or position-based approvers can create call-ins"
+                )
+            }
+
             const department = await Department.findById(
                 leaveRequest.department
             ).session(session)
@@ -132,17 +158,7 @@ export class CallInController {
                 return errorResponseObject("Department not found")
             }
 
-            // Check authorization - must be department head or have HR/Admin permissions
             const isDepartmentHead = department.head?.toString() === user._id
-            const hasHRPermission = user?.permissions?.includes("HR")
-            const hasAdminPermission = user?.permissions?.includes("ADMIN")
-
-            if (!isDepartmentHead && !hasHRPermission && !hasAdminPermission) {
-                if (session) await session.abortTransaction()
-                return errorResponseObject(
-                    "Only department heads or HR/Admin can create call-ins"
-                )
-            }
 
             // Validate dates
             const callStart = new Date(callInStartDate)
@@ -2636,11 +2652,31 @@ export class CallInController {
                 user?.permissions?.includes("ADMIN") ||
                 user?.permissions?.includes("MANAGER")
 
+            let isApprover = false
             if (!canViewAll) {
+                // Check if user is an approver
+                const userContract = await StaffContract.findOne({
+                    staff: user._id,
+                    status: "active",
+                })
+                if (userContract?.position) {
+                    const approverMatch = await JobPosition.findOne({
+                        approverPosition: userContract.position,
+                    })
+                    isApprover = !!approverMatch
+                }
+            }
+
+            if (!canViewAll && !isApprover) {
                 return errorResponseObject("Unauthorized to view call-ins")
             }
 
             const query: any = {}
+
+            // Approvers only see call-ins they created
+            if (!canViewAll && isApprover) {
+                query.requestedBy = user._id
+            }
 
             // Build search query
             if (search) {

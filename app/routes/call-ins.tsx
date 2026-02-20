@@ -10,25 +10,17 @@ import {
     DrawerContent,
     DrawerFooter,
     DrawerHeader,
-    Input,
-    Modal,
-    ModalBody,
-    ModalContent,
-    ModalFooter,
-    ModalHeader,
     Select,
     SelectItem,
-    Spinner,
     TableCell,
     TableRow,
-    Textarea,
     Tooltip,
     useDisclosure,
     Popover,
     PopoverTrigger,
     PopoverContent,
 } from "@heroui/react"
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import axios from "axios"
 import { LoaderFunctionArgs, redirect } from "react-router"
 import { useLoaderData, useSearchParams } from "react-router"
@@ -40,13 +32,9 @@ import useSWR from "swr"
 import { DateTime } from "luxon"
 import { fetcher } from "~/ui/lib/fetcher"
 import { exportData, formatters, ExportFormat } from "~/ui/lib/export-utils"
-import { LeaveStatus } from "~/utils/types"
 import {
-    CalendarDays,
     Eye,
-    Phone,
     PhoneCall,
-    User,
     Calendar,
     ArrowLeftFromLine,
     Clock,
@@ -56,18 +44,16 @@ import {
     Download,
 } from "lucide-react"
 import { MobileList } from "~/ui/components/lists"
-import { LeaveTypeChip, LeaveStatusChip } from "~/ui/components/chips"
+import { LeaveTypeChip } from "~/ui/components/chips"
 
 export default function CallIns() {
-    const { sessionData, baseUrl, isApprover } = useLoaderData<typeof loader>()
+    const { sessionData, baseUrl } = useLoaderData<typeof loader>()
     const [searchParams, setSearchParams] = useSearchParams()
 
     // Check permissions
     const isHrOrAdmin =
         sessionData?.user?.permissions?.includes("HR") ||
         sessionData?.user?.permissions?.includes("ADMIN")
-    const isManager = sessionData?.user?.permissions?.includes("MANAGER")
-    const canCreateCallIn = isHrOrAdmin || isManager || isApprover
 
     // Fetch call-ins
     const {
@@ -80,97 +66,16 @@ export default function CallIns() {
         fetcher(sessionData.token as string)
     )
 
-    // Debug: Log call-ins data
-    console.log("[CallIns] Full response:", callInsData)
-    console.log("[CallIns] Data object:", callInsData?.data)
-    console.log("[CallIns] CallIns array:", callInsData?.data?.callIns)
-    console.log("[CallIns] Error:", callInsError)
-    console.log("[CallIns] Is loading:", isLoading)
-
-    // Fetch approved leaves on leave (for creating call-ins)
-    const { data: onLeaveData, isLoading: onLeaveLoading } = useSWR(
-        canCreateCallIn ? `${baseUrl}/call-ins?op=on-leave` : null,
-        fetcher(sessionData.token as string)
-    )
-
     // Disclosures
-    const createDisclosure = useDisclosure()
     const viewDisclosure = useDisclosure()
 
     // Selected call-in for view
     const [selectedCallIn, setSelectedCallIn] = useState<any>(null)
     const [selectedExportFormat, setSelectedExportFormat] = useState<ExportFormat>("csv")
 
-    // Form state for create
-    const [formData, setFormData] = useState({
-        leaveRequestId: "",
-        callInStartDate: "",
-        callInEndDate: "",
-        reason: "",
-    })
-
-    // Selected leave request for preview
-    const [selectedLeave, setSelectedLeave] = useState<any>(null)
-
-    // Calculated data
-    const [calculatedDays, setCalculatedDays] = useState<number | null>(null)
-    const [isCalculating, setIsCalculating] = useState(false)
-    const [isSubmitting, setIsSubmitting] = useState(false)
+    // Delete state
     const [isDeleting, setIsDeleting] = useState(false)
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-
-    // Calculate recovered days when dates change
-    useEffect(() => {
-        const calculateDays = async () => {
-            if (!formData.leaveRequestId || !formData.callInStartDate) {
-                setCalculatedDays(null)
-                return
-            }
-
-            setIsCalculating(true)
-            try {
-                const response = await axios.post(
-                    `${baseUrl}/call-ins?op=calculate`,
-                    {
-                        leaveRequestId: formData.leaveRequestId,
-                        callInStartDate: formData.callInStartDate,
-                        callInEndDate: formData.callInEndDate || formData.callInStartDate,
-                    },
-                    {
-                        headers: {
-                            Authorization: `Bearer ${sessionData?.token}`,
-                        },
-                    }
-                )
-
-                if (response.data?.data) {
-                    setCalculatedDays(response.data.data.workingDaysRecovered)
-                }
-            } catch (error) {
-                console.error("Error calculating days:", error)
-                setCalculatedDays(null)
-            } finally {
-                setIsCalculating(false)
-            }
-        }
-
-        const debounce = setTimeout(calculateDays, 300)
-        return () => clearTimeout(debounce)
-    }, [formData.leaveRequestId, formData.callInStartDate, formData.callInEndDate, baseUrl, sessionData?.token])
-
-    // Handle leave selection
-    const handleLeaveSelect = (leaveId: string) => {
-        const leave = onLeaveData?.data?.staffOnLeave?.find(
-            (l: any) => l.leaveRequest._id === leaveId
-        )
-        setSelectedLeave(leave)
-        setFormData({
-            ...formData,
-            leaveRequestId: leaveId,
-            callInStartDate: "",
-            callInEndDate: "",
-        })
-    }
 
     // Format date range
     const formatDateRange = (startDate: string, endDate: string) => {
@@ -181,72 +86,6 @@ export default function CallIns() {
             return start.toFormat("ccc, LLL d yyyy")
         }
         return `${start.toFormat("LLL d")} - ${end.toFormat("LLL d, yyyy")}`
-    }
-
-    // Handle create call-in
-    const handleCreateCallIn = async (onClose: () => void) => {
-        if (!formData.leaveRequestId || !formData.callInStartDate || !formData.reason.trim()) {
-            return
-        }
-
-        const payload = {
-            leaveRequestId: formData.leaveRequestId,
-            callInStartDate: formData.callInStartDate,
-            callInEndDate: formData.callInEndDate || formData.callInStartDate,
-            reason: formData.reason,
-        }
-        console.log("Creating call-in with payload:", payload)
-
-        setIsSubmitting(true)
-        try {
-            await axios.post(
-                `${baseUrl}/call-ins`,
-                payload,
-                {
-                    headers: {
-                        Authorization: `Bearer ${sessionData?.token}`,
-                    },
-                }
-            )
-
-            // Reset form
-            setFormData({
-                leaveRequestId: "",
-                callInStartDate: "",
-                callInEndDate: "",
-                reason: "",
-            })
-            setSelectedLeave(null)
-            setCalculatedDays(null)
-
-            await mutate()
-            onClose()
-            addToast({
-                color: "success",
-                title: "Success",
-                description: "Call-in created successfully. Staff has been notified.",
-            })
-        } catch (error: any) {
-            console.error("Error creating call-in:", error)
-            console.error("Error response:", error.response?.data)
-
-            // Get detailed error message
-            let errorMessage = "Failed to create call-in"
-            if (error.response?.data?.errors?.length > 0) {
-                // Show first validation error
-                errorMessage = error.response.data.errors[0].message
-            } else if (error.response?.data?.message) {
-                errorMessage = error.response.data.message
-            }
-
-            addToast({
-                color: "danger",
-                title: "Error",
-                description: errorMessage,
-            })
-        } finally {
-            setIsSubmitting(false)
-        }
     }
 
     // Handle view call-in
@@ -353,20 +192,10 @@ export default function CallIns() {
                     <div>
                         <h1 className='text-2xl font-bold'>Call-Ins</h1>
                         <p className='text-sm text-zinc-500'>
-                            Recall staff from approved leave when needed
+                            View staff call-ins from approved leave
                         </p>
                     </div>
                     <div className='flex items-center gap-2'>
-                        {canCreateCallIn && (
-                            <Button
-                                color='warning'
-                                size='sm'
-                                startContent={<PhoneCall className='size-4' />}
-                                onPress={createDisclosure.onOpen}
-                            >
-                                New Call-In
-                            </Button>
-                        )}
                         <Select
                             size='sm'
                             radius='sm'
@@ -392,27 +221,6 @@ export default function CallIns() {
                         </Button>
                     </div>
                 </div>
-
-                {/* Staff Currently on Leave Summary */}
-                {canCreateCallIn && onLeaveData?.data?.staffOnLeave?.length > 0 && (
-                    <Card className='border border-warning-200 dark:border-warning-800 bg-warning-50 dark:bg-warning-900/10'>
-                        <CardBody className='p-4'>
-                            <div className='flex items-center gap-3'>
-                                <div className='size-10 rounded-lg bg-warning-500/20 flex items-center justify-center'>
-                                    <User className='size-5 text-warning-600' />
-                                </div>
-                                <div>
-                                    <p className='font-semibold'>
-                                        {onLeaveData.data.staffOnLeave.length} Staff Currently on Leave
-                                    </p>
-                                    <p className='text-sm text-zinc-500'>
-                                        Click "New Call-In" to recall a staff member
-                                    </p>
-                                </div>
-                            </div>
-                        </CardBody>
-                    </Card>
-                )}
 
                 {/* Call-Ins List */}
                 <div className='flex flex-col gap-4'>
@@ -540,258 +348,6 @@ export default function CallIns() {
                     />
                 </div>
             </div>
-
-            {/* Create Call-In Drawer */}
-            <Drawer
-                isOpen={createDisclosure.isOpen}
-                onOpenChange={createDisclosure.onOpenChange}
-                size='md'
-                backdrop='blur'
-                scrollBehavior='inside'
-            >
-                <DrawerContent>
-                    {(onClose) => (
-                        <>
-                            <DrawerHeader>New Call-In</DrawerHeader>
-                            <Divider />
-                            <DrawerBody className='flex flex-col gap-6 pt-6'>
-                                {onLeaveLoading ? (
-                                    <div className='flex justify-center py-8'>
-                                        <Spinner />
-                                    </div>
-                                ) : onLeaveData?.data?.staffOnLeave?.length === 0 ? (
-                                    <Card className='bg-zinc-50 dark:bg-zinc-900'>
-                                        <CardBody className='p-6 text-center'>
-                                            <User className='size-12 mx-auto text-zinc-400 mb-3' />
-                                            <p className='text-zinc-600 dark:text-zinc-400'>
-                                                No staff currently on approved leave
-                                            </p>
-                                        </CardBody>
-                                    </Card>
-                                ) : (
-                                    <>
-                                        <Select
-                                            label='Staff on Leave'
-                                            variant='bordered'
-                                            labelPlacement='outside'
-                                            placeholder='Select staff to recall'
-                                            isRequired
-                                            selectedKeys={formData.leaveRequestId ? [formData.leaveRequestId] : []}
-                                            onSelectionChange={(keys) => {
-                                                const id = Array.from(keys)[0] as string
-                                                handleLeaveSelect(id)
-                                            }}
-                                            classNames={{
-                                                trigger: "border-zinc-200 dark:border-zinc-800",
-                                            }}
-                                        >
-                                            {onLeaveData?.data?.staffOnLeave?.map((item: any) => (
-                                                <SelectItem
-                                                    key={item.leaveRequest._id}
-                                                    textValue={item.staff.name}
-                                                >
-                                                    <div className='flex justify-between items-center'>
-                                                        <div>
-                                                            <p className='font-medium'>
-                                                                {item.staff.name}
-                                                            </p>
-                                                            <p className='text-xs text-zinc-500'>
-                                                                {item.leaveRequest.leaveType} -{" "}
-                                                                {formatDateRange(
-                                                                    item.leaveRequest.startDate,
-                                                                    item.leaveRequest.endDate
-                                                                )}
-                                                            </p>
-                                                        </div>
-                                                        <Chip size='sm' variant='flat'>
-                                                            {item.leaveRequest.workingDays} days
-                                                        </Chip>
-                                                    </div>
-                                                </SelectItem>
-                                            ))}
-                                        </Select>
-
-                                        {/* Selected Leave Preview */}
-                                        {selectedLeave && (
-                                            <Card className='border border-zinc-200 dark:border-zinc-800'>
-                                                <CardBody className='p-4 space-y-3'>
-                                                    <div className='flex items-center justify-between'>
-                                                        <span className='text-sm text-zinc-500'>
-                                                            Leave Period
-                                                        </span>
-                                                        <span className='text-sm font-medium'>
-                                                            {formatDateRange(
-                                                                selectedLeave.leaveRequest.startDate,
-                                                                selectedLeave.leaveRequest.endDate
-                                                            )}
-                                                        </span>
-                                                    </div>
-                                                    <Divider />
-                                                    <div className='flex items-center justify-between'>
-                                                        <span className='text-sm text-zinc-500'>
-                                                            Leave Type
-                                                        </span>
-                                                        <LeaveTypeChip
-                                                            type={selectedLeave.leaveRequest.leaveType}
-                                                        />
-                                                    </div>
-                                                    <div className='flex items-center justify-between'>
-                                                        <span className='text-sm text-zinc-500'>
-                                                            Days Remaining
-                                                        </span>
-                                                        <span className='text-sm font-medium'>
-                                                            {selectedLeave.daysRemaining} days
-                                                        </span>
-                                                    </div>
-                                                </CardBody>
-                                            </Card>
-                                        )}
-
-                                        <div className='grid grid-cols-2 gap-4'>
-                                            <Input
-                                                label='Call-In Start Date'
-                                                variant='bordered'
-                                                labelPlacement='outside'
-                                                type='date'
-                                                isRequired
-                                                min={
-                                                    selectedLeave
-                                                        ? DateTime.fromISO(
-                                                              selectedLeave.leaveRequest.startDate
-                                                          ).toFormat("yyyy-MM-dd")
-                                                        : undefined
-                                                }
-                                                max={
-                                                    selectedLeave
-                                                        ? DateTime.fromISO(
-                                                              selectedLeave.leaveRequest.endDate
-                                                          ).toFormat("yyyy-MM-dd")
-                                                        : undefined
-                                                }
-                                                value={formData.callInStartDate}
-                                                onValueChange={(value) =>
-                                                    setFormData({
-                                                        ...formData,
-                                                        callInStartDate: value,
-                                                        callInEndDate:
-                                                            !formData.callInEndDate ||
-                                                            formData.callInEndDate < value
-                                                                ? value
-                                                                : formData.callInEndDate,
-                                                    })
-                                                }
-                                                isDisabled={!selectedLeave}
-                                                classNames={{
-                                                    inputWrapper:
-                                                        "border-zinc-200 dark:border-zinc-800",
-                                                }}
-                                            />
-
-                                            <Input
-                                                label='Call-In End Date'
-                                                variant='bordered'
-                                                labelPlacement='outside'
-                                                type='date'
-                                                min={formData.callInStartDate}
-                                                max={
-                                                    selectedLeave
-                                                        ? DateTime.fromISO(
-                                                              selectedLeave.leaveRequest.endDate
-                                                          ).toFormat("yyyy-MM-dd")
-                                                        : undefined
-                                                }
-                                                value={formData.callInEndDate}
-                                                onValueChange={(value) =>
-                                                    setFormData({
-                                                        ...formData,
-                                                        callInEndDate: value,
-                                                    })
-                                                }
-                                                isDisabled={!selectedLeave}
-                                                description='Leave empty for single day'
-                                                classNames={{
-                                                    inputWrapper:
-                                                        "border-zinc-200 dark:border-zinc-800",
-                                                }}
-                                            />
-                                        </div>
-
-                                        {/* Calculated Days */}
-                                        {(isCalculating || calculatedDays !== null) && (
-                                            <Card className='bg-success-50 dark:bg-success-900/10 border border-success-200 dark:border-success-800'>
-                                                <CardBody className='p-4'>
-                                                    {isCalculating ? (
-                                                        <div className='flex items-center gap-2'>
-                                                            <Spinner size='sm' />
-                                                            <span className='text-sm'>
-                                                                Calculating...
-                                                            </span>
-                                                        </div>
-                                                    ) : (
-                                                        <div className='flex items-center justify-between'>
-                                                            <span className='text-sm text-success-700 dark:text-success-400'>
-                                                                Days to be recovered
-                                                            </span>
-                                                            <span className='text-xl font-bold text-success-600'>
-                                                                +{calculatedDays} days
-                                                            </span>
-                                                        </div>
-                                                    )}
-                                                </CardBody>
-                                            </Card>
-                                        )}
-
-                                        <Textarea
-                                            label='Reason for Call-In'
-                                            variant='bordered'
-                                            labelPlacement='outside'
-                                            placeholder='Explain why the staff needs to return early (minimum 10 characters)'
-                                            isRequired
-                                            minLength={10}
-                                            value={formData.reason}
-                                            onValueChange={(value) =>
-                                                setFormData({ ...formData, reason: value })
-                                            }
-                                            description={`${formData.reason.length}/10 characters minimum`}
-                                            isInvalid={formData.reason.length > 0 && formData.reason.length < 10}
-                                            errorMessage={formData.reason.length > 0 && formData.reason.length < 10 ? "Reason must be at least 10 characters" : ""}
-                                            classNames={{
-                                                inputWrapper:
-                                                    "border-zinc-200 dark:border-zinc-800",
-                                            }}
-                                        />
-                                    </>
-                                )}
-                            </DrawerBody>
-                            <DrawerFooter>
-                                <Button
-                                    color='default'
-                                    variant='flat'
-                                    onPress={onClose}
-                                    isDisabled={isSubmitting}
-                                >
-                                    Cancel
-                                </Button>
-                                <Button
-                                    color='warning'
-                                    onPress={() => handleCreateCallIn(onClose)}
-                                    isLoading={isSubmitting}
-                                    isDisabled={
-                                        !formData.leaveRequestId ||
-                                        !formData.callInStartDate ||
-                                        !formData.reason.trim() ||
-                                        formData.reason.trim().length < 10 ||
-                                        calculatedDays === null ||
-                                        calculatedDays === 0
-                                    }
-                                >
-                                    Create Call-In
-                                </Button>
-                            </DrawerFooter>
-                        </>
-                    )}
-                </DrawerContent>
-            </Drawer>
 
             {/* View Call-In Drawer */}
             <Drawer
@@ -1025,27 +581,5 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const sessionData = await getSessionData(request)
     const baseUrl = process.env.BASE_URL as string
 
-    // Check if user is an approver (their position is set as approverPosition on any job position)
-    let isApprover = false
-    try {
-        const { connectDB } = await import("~/database/connect")
-        const StaffContract = (await import("~/models/staff-contract.model")).default
-        const JobPosition = (await import("~/models/job-position.model")).default
-        await connectDB()
-
-        const userContract = await StaffContract.findOne({
-            staff: sessionData?.user?._id,
-            status: "active",
-        })
-        if (userContract?.position) {
-            const approverMatch = await JobPosition.findOne({
-                approverPosition: userContract.position,
-            })
-            isApprover = !!approverMatch
-        }
-    } catch (err) {
-        console.error("[CallIns] Error checking approver status:", err)
-    }
-
-    return { sessionData, baseUrl, isApprover }
+    return { sessionData, baseUrl }
 }

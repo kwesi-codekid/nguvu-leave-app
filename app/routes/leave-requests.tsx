@@ -74,6 +74,7 @@ import {
     Download,
     Pencil,
     Trash2,
+    PhoneCall,
 } from "lucide-react"
 import { MobileList } from "~/ui/components/lists"
 import { LeaveStatusChip, LeaveTypeChip } from "~/ui/components/chips"
@@ -88,19 +89,15 @@ const LEAVE_TYPE_OPTIONS = [
 ]
 
 export default function LeaveRequests() {
-    const { sessionData, baseUrl } = useLoaderData<typeof loader>()
+    const { sessionData, baseUrl, isApprover, isEndorser } = useLoaderData<typeof loader>()
     const [searchParams, setSearchParams] = useSearchParams()
 
     // Current tab
     const currentTab = searchParams.get("tab") || "my-requests"
 
     // User permissions check
-    const isHrOrAdmin =
-        sessionData?.user?.permissions?.includes("HR") ||
-        sessionData?.user?.permissions?.includes("ADMIN")
-    const isManager = sessionData?.user?.permissions?.includes("MANAGER")
-    const canEndorse = isHrOrAdmin || isManager
-    const canApprove = isHrOrAdmin
+    const canEndorse = isEndorser
+    const canApprove = isApprover
     const canDelegate = sessionData?.user?.permissions?.includes("DELEGATE")
 
     // Fetch my requests
@@ -216,6 +213,19 @@ export default function LeaveRequests() {
     const withdrawDisclosure = useDisclosure()
     const editDisclosure = useDisclosure()
     const deleteDisclosure = useDisclosure()
+    const callInDisclosure = useDisclosure()
+
+    // Call-in state
+    const [callInFormData, setCallInFormData] = useState({
+        leaveRequestId: "",
+        callInStartDate: "",
+        callInEndDate: "",
+        reason: "",
+    })
+    const [callInLeaveRequest, setCallInLeaveRequest] = useState<any>(null)
+    const [callInCalculatedDays, setCallInCalculatedDays] = useState<number | null>(null)
+    const [isCalculatingCallIn, setIsCalculatingCallIn] = useState(false)
+    const [isSubmittingCallIn, setIsSubmittingCallIn] = useState(false)
 
     // Selected request for view/actions
     const [selectedRequest, setSelectedRequest] = useState<any>(null)
@@ -1452,6 +1462,120 @@ export default function LeaveRequests() {
         </TableRow>
     )
 
+    // Calculate recovered days when call-in dates change
+    useEffect(() => {
+        const calculateDays = async () => {
+            if (!callInFormData.leaveRequestId || !callInFormData.callInStartDate) {
+                setCallInCalculatedDays(null)
+                return
+            }
+
+            setIsCalculatingCallIn(true)
+            try {
+                const response = await axios.post(
+                    `${baseUrl}/call-ins?op=calculate`,
+                    {
+                        leaveRequestId: callInFormData.leaveRequestId,
+                        callInStartDate: callInFormData.callInStartDate,
+                        callInEndDate: callInFormData.callInEndDate || callInFormData.callInStartDate,
+                    },
+                    {
+                        headers: {
+                            Authorization: `Bearer ${sessionData?.token}`,
+                        },
+                    }
+                )
+
+                if (response.data?.data) {
+                    setCallInCalculatedDays(response.data.data.workingDaysRecovered)
+                }
+            } catch (error) {
+                console.error("Error calculating call-in days:", error)
+                setCallInCalculatedDays(null)
+            } finally {
+                setIsCalculatingCallIn(false)
+            }
+        }
+
+        const debounce = setTimeout(calculateDays, 300)
+        return () => clearTimeout(debounce)
+    }, [callInFormData.leaveRequestId, callInFormData.callInStartDate, callInFormData.callInEndDate, baseUrl, sessionData?.token])
+
+    // Handle opening call-in drawer for a specific request
+    const handleOpenCallIn = (request: any) => {
+        setCallInLeaveRequest(request)
+        setCallInFormData({
+            leaveRequestId: request._id,
+            callInStartDate: "",
+            callInEndDate: "",
+            reason: "",
+        })
+        setCallInCalculatedDays(null)
+        callInDisclosure.onOpen()
+    }
+
+    // Handle creating a call-in
+    const handleCreateCallIn = async (onClose: () => void) => {
+        if (!callInFormData.leaveRequestId || !callInFormData.callInStartDate || !callInFormData.reason.trim()) {
+            return
+        }
+
+        const payload = {
+            leaveRequestId: callInFormData.leaveRequestId,
+            callInStartDate: callInFormData.callInStartDate,
+            callInEndDate: callInFormData.callInEndDate || callInFormData.callInStartDate,
+            reason: callInFormData.reason,
+        }
+
+        setIsSubmittingCallIn(true)
+        try {
+            await axios.post(
+                `${baseUrl}/call-ins`,
+                payload,
+                {
+                    headers: {
+                        Authorization: `Bearer ${sessionData?.token}`,
+                    },
+                }
+            )
+
+            // Reset form
+            setCallInFormData({
+                leaveRequestId: "",
+                callInStartDate: "",
+                callInEndDate: "",
+                reason: "",
+            })
+            setCallInLeaveRequest(null)
+            setCallInCalculatedDays(null)
+
+            await mutateMyApproved()
+            onClose()
+            addToast({
+                color: "success",
+                title: "Success",
+                description: "Call-in created successfully. Staff has been notified.",
+            })
+        } catch (error: any) {
+            console.error("Error creating call-in:", error)
+
+            let errorMessage = "Failed to create call-in"
+            if (error.response?.data?.errors?.length > 0) {
+                errorMessage = error.response.data.errors[0].message
+            } else if (error.response?.data?.message) {
+                errorMessage = error.response.data.message
+            }
+
+            addToast({
+                color: "danger",
+                title: "Error",
+                description: errorMessage,
+            })
+        } finally {
+            setIsSubmittingCallIn(false)
+        }
+    }
+
     // Render approved request row for table
     const renderApprovedRequestRow = (request: any) => (
         <TableRow key={request._id}>
@@ -1473,8 +1597,8 @@ export default function LeaveRequests() {
                 {request.workingDays} day{request.workingDays !== 1 ? "s" : ""}
             </TableCell>
             <TableCell className='text-sm text-zinc-500'>
-                {request.approvedAt || request.approval?.at ? 
-                    DateTime.fromISO(request.approvedAt || request.approval?.at).toRelative() : 
+                {request.approvedAt || request.approval?.at ?
+                    DateTime.fromISO(request.approvedAt || request.approval?.at).toRelative() :
                     '-'
                 }
             </TableCell>
@@ -1494,6 +1618,22 @@ export default function LeaveRequests() {
                             <Eye className='size-4' />
                         </Button>
                     </Tooltip>
+                    {request.canCallIn && (
+                        <Tooltip content='Call in from leave'>
+                            <Button
+                                size='sm'
+                                color='warning'
+                                variant='flat'
+                                isIconOnly
+                                onPress={() => handleOpenCallIn(request)}
+                            >
+                                <PhoneCall className='size-4' />
+                            </Button>
+                        </Tooltip>
+                    )}
+                    {request.isFullyCalledIn && (
+                        <Chip size='sm' color='default' variant='flat'>Called In</Chip>
+                    )}
                 </div>
             </TableCell>
         </TableRow>
@@ -2049,13 +2189,31 @@ export default function LeaveRequests() {
                                     listContent={myApprovedData?.data?.requests?.map((request: any) => ({
                                         startIcon: <CheckCircle className='size-5 text-success' />,
                                         content: (
-                                            <div onClick={() => handleViewRequest(request)} className='cursor-pointer'>
-                                                <div className='flex items-center justify-between'>
-                                                    <span className='font-medium'>{request.staff?.name}</span>
-                                                    <LeaveTypeChip type={request.leaveType} />
+                                            <div className='cursor-pointer'>
+                                                <div onClick={() => handleViewRequest(request)}>
+                                                    <div className='flex items-center justify-between'>
+                                                        <span className='font-medium'>{request.staff?.name}</span>
+                                                        <LeaveTypeChip type={request.leaveType} />
+                                                    </div>
+                                                    <p className='text-sm mt-1'>{formatDateRange(request.startDate, request.endDate)}</p>
+                                                    <p className='text-xs text-zinc-500'>{request.workingDays} days - Approved {DateTime.fromISO(request.approvedAt || request.approval?.at).toRelative()}</p>
                                                 </div>
-                                                <p className='text-sm mt-1'>{formatDateRange(request.startDate, request.endDate)}</p>
-                                                <p className='text-xs text-zinc-500'>{request.workingDays} days - Approved {DateTime.fromISO(request.approvedAt || request.approval?.at).toRelative()}</p>
+                                                <div className='flex items-center gap-2 mt-2'>
+                                                    {request.canCallIn && (
+                                                        <Button
+                                                            size='sm'
+                                                            color='warning'
+                                                            variant='flat'
+                                                            startContent={<PhoneCall className='size-3' />}
+                                                            onPress={() => handleOpenCallIn(request)}
+                                                        >
+                                                            Call In
+                                                        </Button>
+                                                    )}
+                                                    {request.isFullyCalledIn && (
+                                                        <Chip size='sm' color='default' variant='flat'>Called In</Chip>
+                                                    )}
+                                                </div>
                                             </div>
                                         ),
                                     }))}
@@ -3174,6 +3332,190 @@ export default function LeaveRequests() {
                     )}
                 </ModalContent>
             </Modal>
+
+            {/* Call-In Creation Drawer */}
+            <Drawer
+                isOpen={callInDisclosure.isOpen}
+                onOpenChange={callInDisclosure.onOpenChange}
+                size='md'
+                backdrop='blur'
+                scrollBehavior='inside'
+            >
+                <DrawerContent>
+                    {(onClose) => (
+                        <>
+                            <DrawerHeader>Call In from Leave</DrawerHeader>
+                            <Divider />
+                            <DrawerBody className='flex flex-col gap-6 pt-6'>
+                                {/* Staff & Leave Preview */}
+                                {callInLeaveRequest && (
+                                    <Card className='border border-zinc-200 dark:border-zinc-800'>
+                                        <CardBody className='p-4 space-y-3'>
+                                            <div className='flex items-center justify-between'>
+                                                <span className='text-sm text-zinc-500'>Staff</span>
+                                                <span className='text-sm font-medium'>
+                                                    {callInLeaveRequest.staff?.name}
+                                                </span>
+                                            </div>
+                                            <Divider />
+                                            <div className='flex items-center justify-between'>
+                                                <span className='text-sm text-zinc-500'>Leave Period</span>
+                                                <span className='text-sm font-medium'>
+                                                    {formatDateRange(callInLeaveRequest.startDate, callInLeaveRequest.endDate)}
+                                                </span>
+                                            </div>
+                                            <div className='flex items-center justify-between'>
+                                                <span className='text-sm text-zinc-500'>Leave Type</span>
+                                                <LeaveTypeChip type={callInLeaveRequest.leaveType} />
+                                            </div>
+                                            <div className='flex items-center justify-between'>
+                                                <span className='text-sm text-zinc-500'>Working Days</span>
+                                                <span className='text-sm font-medium'>
+                                                    {callInLeaveRequest.workingDays} days
+                                                </span>
+                                            </div>
+                                            {callInLeaveRequest.totalDaysRecovered > 0 && (
+                                                <div className='flex items-center justify-between'>
+                                                    <span className='text-sm text-zinc-500'>Already Called In</span>
+                                                    <span className='text-sm font-medium text-warning-600'>
+                                                        {callInLeaveRequest.totalDaysRecovered} days
+                                                    </span>
+                                                </div>
+                                            )}
+                                        </CardBody>
+                                    </Card>
+                                )}
+
+                                <div className='grid grid-cols-2 gap-4'>
+                                    <Input
+                                        label='Call-In Start Date'
+                                        variant='bordered'
+                                        labelPlacement='outside'
+                                        type='date'
+                                        isRequired
+                                        min={
+                                            callInLeaveRequest
+                                                ? DateTime.fromISO(callInLeaveRequest.startDate).toFormat("yyyy-MM-dd")
+                                                : undefined
+                                        }
+                                        max={
+                                            callInLeaveRequest
+                                                ? DateTime.fromISO(callInLeaveRequest.endDate).toFormat("yyyy-MM-dd")
+                                                : undefined
+                                        }
+                                        value={callInFormData.callInStartDate}
+                                        onValueChange={(value) =>
+                                            setCallInFormData({
+                                                ...callInFormData,
+                                                callInStartDate: value,
+                                                callInEndDate:
+                                                    !callInFormData.callInEndDate ||
+                                                    callInFormData.callInEndDate < value
+                                                        ? value
+                                                        : callInFormData.callInEndDate,
+                                            })
+                                        }
+                                        classNames={{
+                                            inputWrapper: "border-zinc-200 dark:border-zinc-800",
+                                        }}
+                                    />
+
+                                    <Input
+                                        label='Call-In End Date'
+                                        variant='bordered'
+                                        labelPlacement='outside'
+                                        type='date'
+                                        min={callInFormData.callInStartDate}
+                                        max={
+                                            callInLeaveRequest
+                                                ? DateTime.fromISO(callInLeaveRequest.endDate).toFormat("yyyy-MM-dd")
+                                                : undefined
+                                        }
+                                        value={callInFormData.callInEndDate}
+                                        onValueChange={(value) =>
+                                            setCallInFormData({
+                                                ...callInFormData,
+                                                callInEndDate: value,
+                                            })
+                                        }
+                                        description='Leave empty for single day'
+                                        classNames={{
+                                            inputWrapper: "border-zinc-200 dark:border-zinc-800",
+                                        }}
+                                    />
+                                </div>
+
+                                {/* Calculated Days */}
+                                {(isCalculatingCallIn || callInCalculatedDays !== null) && (
+                                    <Card className='bg-success-50 dark:bg-success-900/10 border border-success-200 dark:border-success-800'>
+                                        <CardBody className='p-4'>
+                                            {isCalculatingCallIn ? (
+                                                <div className='flex items-center gap-2'>
+                                                    <Spinner size='sm' />
+                                                    <span className='text-sm'>Calculating...</span>
+                                                </div>
+                                            ) : (
+                                                <div className='flex items-center justify-between'>
+                                                    <span className='text-sm text-success-700 dark:text-success-400'>
+                                                        Days to be recovered
+                                                    </span>
+                                                    <span className='text-xl font-bold text-success-600'>
+                                                        +{callInCalculatedDays} days
+                                                    </span>
+                                                </div>
+                                            )}
+                                        </CardBody>
+                                    </Card>
+                                )}
+
+                                <Textarea
+                                    label='Reason for Call-In'
+                                    variant='bordered'
+                                    labelPlacement='outside'
+                                    placeholder='Explain why the staff needs to return early (minimum 10 characters)'
+                                    isRequired
+                                    minLength={10}
+                                    value={callInFormData.reason}
+                                    onValueChange={(value) =>
+                                        setCallInFormData({ ...callInFormData, reason: value })
+                                    }
+                                    description={`${callInFormData.reason.length}/10 characters minimum`}
+                                    isInvalid={callInFormData.reason.length > 0 && callInFormData.reason.length < 10}
+                                    errorMessage={callInFormData.reason.length > 0 && callInFormData.reason.length < 10 ? "Reason must be at least 10 characters" : ""}
+                                    classNames={{
+                                        inputWrapper: "border-zinc-200 dark:border-zinc-800",
+                                    }}
+                                />
+                            </DrawerBody>
+                            <DrawerFooter>
+                                <Button
+                                    color='default'
+                                    variant='flat'
+                                    onPress={onClose}
+                                    isDisabled={isSubmittingCallIn}
+                                >
+                                    Cancel
+                                </Button>
+                                <Button
+                                    color='warning'
+                                    onPress={() => handleCreateCallIn(onClose)}
+                                    isLoading={isSubmittingCallIn}
+                                    isDisabled={
+                                        !callInFormData.leaveRequestId ||
+                                        !callInFormData.callInStartDate ||
+                                        !callInFormData.reason.trim() ||
+                                        callInFormData.reason.trim().length < 10 ||
+                                        callInCalculatedDays === null ||
+                                        callInCalculatedDays === 0
+                                    }
+                                >
+                                    Create Call-In
+                                </Button>
+                            </DrawerFooter>
+                        </>
+                    )}
+                </DrawerContent>
+            </Drawer>
         </AppLayout>
     )
 }
@@ -3185,5 +3527,29 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
     const sessionData = await getSessionData(request)
     const baseUrl = process.env.BASE_URL as string
-    return { sessionData, baseUrl }
+
+    let isApprover = false
+    let isEndorser = false
+    try {
+        const { connectDB } = await import("~/database/connect")
+        const StaffContract = (await import("~/models/staff-contract.model")).default
+        const JobPosition = (await import("~/models/job-position.model")).default
+        await connectDB()
+        const userContract = await StaffContract.findOne({
+            staff: sessionData?.user?._id,
+            status: "active",
+        })
+        if (userContract?.position) {
+            const [approverMatch, endorserMatch] = await Promise.all([
+                JobPosition.findOne({ approverPosition: userContract.position }),
+                JobPosition.findOne({ endorserPosition: userContract.position }),
+            ])
+            isApprover = !!approverMatch
+            isEndorser = !!endorserMatch
+        }
+    } catch (err) {
+        console.error("Error checking approver/endorser status:", err)
+    }
+
+    return { sessionData, baseUrl, isApprover, isEndorser }
 }

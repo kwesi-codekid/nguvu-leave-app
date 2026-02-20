@@ -7,6 +7,7 @@ import JobPosition from "../models/job-position.model"
 import Department from "../models/department.model"
 import LeaveBalance from "../models/leave-balance.model"
 import Holiday from "../models/holiday.model"
+import CallIn from "../models/call-in.model"
 import AuditLogController from "./audit-log.controller"
 import NotificationController from "./notification.controller"
 import SMSService from "../services/sms.service"
@@ -2395,25 +2396,55 @@ export class LeaveRequestController {
                 LeaveRequest.countDocuments(query),
             ])
 
+            // Batch-fetch all call-ins for these requests
+            const requestIds = requests.map((r) => r._id)
+            const allCallIns = await CallIn.find({
+                leaveRequest: { $in: requestIds },
+            }).lean()
+            const callInsByRequest: Record<string, any[]> = {}
+            for (const ci of allCallIns) {
+                const key = ci.leaveRequest.toString()
+                if (!callInsByRequest[key]) callInsByRequest[key] = []
+                callInsByRequest[key].push(ci)
+            }
+
             // Add computed fields
-            const enhancedRequests = requests.map((request) => ({
-                ...request,
-                approvedAt: request.approval?.at,
-                daysUntilStart:
-                    request.status === LeaveStatus.APPROVED
+            const now = new Date()
+            const enhancedRequests = requests.map((request) => {
+                const reqCallIns = callInsByRequest[request._id.toString()] || []
+                const totalDaysRecovered = reqCallIns.reduce(
+                    (sum: number, ci: any) => sum + (ci.workingDaysRecovered || 0),
+                    0
+                )
+                const isApproved = request.status === LeaveStatus.APPROVED
+                const startDate = new Date(request.startDate)
+                const endDate = new Date(request.endDate)
+
+                return {
+                    ...request,
+                    approvedAt: request.approval?.at,
+                    daysUntilStart: isApproved
                         ? Math.max(
                               0,
                               Math.ceil(
-                                  (new Date(request.startDate).getTime() -
-                                      Date.now()) /
+                                  (startDate.getTime() - Date.now()) /
                                       (1000 * 60 * 60 * 24)
                               )
                           )
                         : null,
-                isStarted:
-                    request.status === LeaveStatus.APPROVED &&
-                    new Date(request.startDate) <= new Date(),
-            }))
+                    isStarted: isApproved && startDate <= now,
+                    totalDaysRecovered,
+                    existingCallIns: reqCallIns.length,
+                    canCallIn:
+                        isApproved &&
+                        now >= startDate &&
+                        now <= endDate &&
+                        totalDaysRecovered < (request.workingDays || 0),
+                    isFullyCalledIn:
+                        totalDaysRecovered >= (request.workingDays || 0) &&
+                        reqCallIns.length > 0,
+                }
+            })
 
             // Summary statistics
             const summary = {
