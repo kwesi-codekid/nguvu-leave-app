@@ -92,11 +92,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Meta />
         <Links />
         <script dangerouslySetInnerHTML={{ __html: `(function(){
-          var DISMISS_KEY='pwa-install-dismissed',DISMISS_MS=604800000,DELAY=60000;
+          var DISMISS_KEY='pwa-install-dismissed-v2',DISMISS_MS=604800000,DELAY=60000;
+          try{localStorage.removeItem('pwa-install-dismissed')}catch(e){}
           function dismissed(){try{var d=localStorage.getItem(DISMISS_KEY);return d?Date.now()-parseInt(d)<DISMISS_MS:false}catch(e){return false}}
           function standalone(){return window.matchMedia('(display-mode:standalone)').matches||(navigator.standalone===true)}
           function dismiss(t){t.style.transform='translateY(1rem)';t.style.opacity='0';setTimeout(function(){t.remove()},300);try{localStorage.setItem(DISMISS_KEY,Date.now().toString())}catch(e){}}
           function show(prompt){
+            try{
             if(!prompt||standalone()||dismissed()||document.getElementById('pwa-install-toast'))return;
             var isDark=document.documentElement.classList.contains('dark');
             var bg=isDark?'#18181b':'white';var border=isDark?'#3f3f46':'#e4e4e7';var sub=isDark?'#a1a1aa':'#71717a';
@@ -109,6 +111,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             document.getElementById('pwa-install-btn').addEventListener('click',function(){
               prompt.prompt().then(function(){return prompt.userChoice}).then(function(c){if(c.outcome==='accepted'){t.remove();window.__pwaPrompt=null}else{dismiss(t)}}).catch(function(){dismiss(t)});
             });
+            }catch(e){console.warn('[PWA Toast] Error showing install toast:',e)}
           }
           function schedule(prompt){if(!standalone()&&!dismissed())setTimeout(function(){show(prompt)},DELAY)}
           window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();window.__pwaPrompt=e;schedule(e)});

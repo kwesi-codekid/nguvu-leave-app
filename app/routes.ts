@@ -53,6 +53,9 @@ export default [
     // Notifications page
     route("notifications", "routes/notifications.tsx"),
 
+    // Standalone utility pages
+    route("update-balance", "routes/update-balance.tsx"),
+
     // Catch-all
     route("*", "routes/$.tsx"),
 ] satisfies RouteConfig;
