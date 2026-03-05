@@ -28,7 +28,6 @@ export const links: Route.LinksFunction = () => [
     rel: "stylesheet",
     href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
   },
-  { rel: "manifest", href: "/manifest.webmanifest" },
   { rel: "apple-touch-icon", href: "/pwa-192x192.png" },
 ];
 
@@ -76,10 +75,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           flash.title || (flash.status === "error" ? "Error Occurred!" : "Successful"),
       });
     }
-    
-    // Register service worker for PWA functionality
-    registerServiceWorker();
   }, [flash]);
+
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
 
   return (
     <html lang="en">
@@ -91,6 +91,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         />
         <Meta />
         <Links />
+        <link rel="manifest" href="/manifest.webmanifest" />
       </head>
       <body>
         <Providers>

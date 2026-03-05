@@ -11,10 +11,11 @@ export default defineConfig({
     tsconfigPaths(),
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: false,
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       devOptions: {
-        enabled: false,
-        type: 'module'
+        enabled: true,
+        type: 'classic',
       },
       manifest: {
         name: 'Nguvu Leave Management System',
@@ -58,8 +59,8 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,json,woff2}'],
-        navigateFallback: '/index.html',
+        globPatterns: ['**/*.{js,css,ico,png,svg,woff2}'],
+        navigateFallback: null,
         skipWaiting: true,
         clientsClaim: true,
         runtimeCaching: [

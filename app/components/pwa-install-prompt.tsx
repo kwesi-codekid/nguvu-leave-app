@@ -7,39 +7,49 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
+// Capture the event at module level so it's never missed,
+// even if it fires before React hydrates.
+let earlyPromptEvent: BeforeInstallPromptEvent | null = null;
+const earlyListeners: Array<(e: BeforeInstallPromptEvent) => void> = [];
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeinstallprompt', (e: Event) => {
+    e.preventDefault();
+    earlyPromptEvent = e as BeforeInstallPromptEvent;
+    earlyListeners.forEach((fn) => fn(earlyPromptEvent!));
+  });
+}
+
+function onPromptCaptured(fn: (e: BeforeInstallPromptEvent) => void) {
+  earlyListeners.push(fn);
+  // If already captured before this listener was added, fire immediately
+  if (earlyPromptEvent) {
+    fn(earlyPromptEvent);
+  }
+}
+
 export function PWAInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [showInstallButton, setShowInstallButton] = useState(false);
-  const [isIOS, setIsIOS] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
 
   useEffect(() => {
-    // Check if running on iOS
-    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    setIsIOS(iOS);
-    
-    // Check if already installed
-    const standalone = window.matchMedia('(display-mode: standalone)').matches || 
+    const standalone = window.matchMedia('(display-mode: standalone)').matches ||
                       (window.navigator as any).standalone === true;
     setIsStandalone(standalone);
 
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e as BeforeInstallPromptEvent);
-      setShowInstallButton(true);
-    };
+    onPromptCaptured((e) => {
+      setDeferredPrompt(e);
+    });
 
     const handleAppInstalled = () => {
-      setShowInstallButton(false);
       setDeferredPrompt(null);
+      earlyPromptEvent = null;
       setIsStandalone(true);
     };
 
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
 
     return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
@@ -49,10 +59,10 @@ export function PWAInstallPrompt() {
       try {
         await deferredPrompt.prompt();
         const { outcome } = await deferredPrompt.userChoice;
-        
+
         if (outcome === 'accepted') {
-          setShowInstallButton(false);
           setDeferredPrompt(null);
+          earlyPromptEvent = null;
         }
       } catch (error) {
         // Installation failed, continue silently
@@ -60,18 +70,11 @@ export function PWAInstallPrompt() {
     }
   };
 
-  // Don't show if already installed
-  if (isStandalone) {
-    return null;
-  }
-
-  // Only show install button if we have a deferred prompt (PWA can be installed)
-  if (!deferredPrompt) {
+  if (isStandalone || !deferredPrompt) {
     return null;
   }
 
   return (
-    /* Floating Install Button */
     <div className="fixed bottom-4 right-4 z-50">
       <Button
         color="primary"

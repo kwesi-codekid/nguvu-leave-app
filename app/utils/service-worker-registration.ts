@@ -1,34 +1,33 @@
 // Service Worker Registration for PWA
 export function registerServiceWorker() {
-  if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js')
-        .then((registration) => {
-          // Registration successful
-          if (registration.active) {
-            // Service worker is already active
-          } else if (registration.installing) {
-            // Service worker is installing
-            registration.installing.addEventListener('statechange', () => {
-              if (registration.installing?.state === 'activated') {
-                // Service worker activated
-              }
-            });
-          } else if (registration.waiting) {
-            // Service worker is waiting to be activated
-            registration.waiting.postMessage({ type: 'SKIP_WAITING' });
-          }
-
-          // Check for updates periodically
-          setInterval(() => {
-            registration.update();
-          }, 60 * 60 * 1000); // Check every hour
-        })
-        .catch((error) => {
-          // Registration failed
-        });
-    });
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+    return;
   }
+
+  // In dev mode, VitePWA serves the SW from /dev-sw.js?dev-sw
+  // which internally loads from dev-dist/sw.js
+  // In production, the SW is at /sw.js
+  const swPath = import.meta.env.DEV ? '/dev-sw.js?dev-sw' : '/sw.js';
+
+  navigator.serviceWorker.register(swPath, {
+    type: 'classic',
+    scope: '/',
+  })
+    .then((registration) => {
+      console.log('SW registered successfully:', registration.scope);
+
+      if (registration.waiting) {
+        registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+      }
+
+      // Check for updates periodically
+      setInterval(() => {
+        registration.update();
+      }, 60 * 60 * 1000);
+    })
+    .catch((error) => {
+      console.error('SW registration failed:', error);
+    });
 }
 
 export function unregisterServiceWorker() {
@@ -38,7 +37,7 @@ export function unregisterServiceWorker() {
         registration.unregister();
       })
       .catch((error) => {
-        // Unregistration failed
+        console.error('SW unregistration failed:', error);
       });
   }
 }
