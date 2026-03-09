@@ -20,6 +20,7 @@ let isConnected = false;
 export const connectDB = async () => {
   // If already connected, return
   if (isConnected) {
+    console.log(MONGODB_URI + " is connected")
     return Promise.resolve();
   }
 
