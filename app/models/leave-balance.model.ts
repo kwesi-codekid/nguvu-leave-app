@@ -80,6 +80,11 @@ const LeaveBalanceSchema = new Schema<any>(
             type: Date,
             // Tracks last monthly accrual
         },
+        manuallySet: {
+            type: Boolean,
+            default: false,
+            // When true, updateAccrual() will not overwrite the accrued value
+        },
         notes: {
             type: String,
             maxlength: 2000,
@@ -222,6 +227,12 @@ LeaveBalanceSchema.methods.updateAccrual = async function (
     }
 
     // Annual leave: monthly accrual logic
+
+    // If accrued was manually set, do not overwrite it with formula-based accrual
+    if (this.manuallySet) {
+        return this
+    }
+
     const now = asOfDate || new Date()
     const periodStart = new Date(this.periodStart)
     const periodEnd = new Date(this.periodEnd)
@@ -285,6 +296,7 @@ LeaveBalanceSchema.methods.resetForNewPeriod = async function (): Promise<ILeave
         : (LEAVE_CAPS[this.leaveType] || 0)
     this.used = 0
     this.adjustments = 0
+    this.manuallySet = false
     this.lastAccrualAt = undefined
 
     // Calculate initial accrual based on contract period

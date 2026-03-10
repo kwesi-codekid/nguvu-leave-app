@@ -99,6 +99,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
             : []
 
     // Map: staffId string -> balance (matching current period)
+    // Use a date-range check instead of exact timestamp match to handle
+    // timezone and storage differences in periodStart values
     const balanceMap = new Map<string, any>()
     for (const balance of existingBalances) {
         const staffIdStr = balance.staff.toString()
@@ -107,7 +109,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
         const balanceStart = new Date(balance.periodStart)
         balanceStart.setHours(0, 0, 0, 0)
-        if (balanceStart.getTime() === period.normalizedStart.getTime()) {
+        const periodNorm = new Date(period.normalizedStart)
+        periodNorm.setHours(0, 0, 0, 0)
+
+        // Match if same calendar day (within 24 hours tolerance)
+        const diffMs = Math.abs(balanceStart.getTime() - periodNorm.getTime())
+        if (diffMs < 86400000) {
             balanceMap.set(staffIdStr, balance)
         }
     }
@@ -240,6 +247,7 @@ export async function action({ request }: ActionFunctionArgs) {
             if (annualBalance) {
                 annualBalance.accrued = accrued
                 annualBalance.allocated = allocated
+                annualBalance.manuallySet = true
                 await annualBalance.save()
             } else {
                 annualBalance = new LeaveBalance({

@@ -274,6 +274,7 @@ export interface LeaveBalanceInterface {
     used: number // Days taken
     adjustments?: number // For annual leave only - manual adjustments
     lastAccrualAt?: Date // For annual leave - track last accrual
+    manuallySet?: boolean // When true, updateAccrual() will not overwrite accrued
     notes?: string
     createdBy?: string
     createdAt?: Date
