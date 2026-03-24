@@ -36,6 +36,8 @@ interface StaffRow {
     periodLabel?: string
     currentAccrued?: number
     allocated?: number
+    used?: number
+    remaining?: number
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -148,6 +150,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
                 const balance = balanceMap.get(staffIdStr)
                 if (balance) {
                     row.currentAccrued = balance.accrued || 0
+                    row.used = balance.used || 0
+                    const base = balance.accrued || 0
+                    row.remaining = base + (balance.adjustments || 0) - (balance.used || 0)
                 }
             }
 
@@ -474,6 +479,7 @@ export default function UpdateBalance() {
                             <TableColumn>DEPARTMENT</TableColumn>
                             <TableColumn>PERIOD</TableColumn>
                             <TableColumn>ANNUAL LEAVE (ACCRUED)</TableColumn>
+                            <TableColumn>REMAINING</TableColumn>
                         </TableHeader>
                         <TableBody emptyContent="No staff found">
                             {filteredStaff.map((row) => (
@@ -521,6 +527,17 @@ export default function UpdateBalance() {
                                                     }))
                                                 }
                                             />
+                                        ) : (
+                                            <span className="text-zinc-400 text-xs">
+                                                N/A
+                                            </span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell>
+                                        {row.hasContract ? (
+                                            <span className={`font-semibold ${(row.remaining ?? 0) < 0 ? 'text-danger-500' : (row.remaining ?? 0) <= 2 ? 'text-warning-500' : ''}`}>
+                                                {row.remaining ?? 0}
+                                            </span>
                                         ) : (
                                             <span className="text-zinc-400 text-xs">
                                                 N/A

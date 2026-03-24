@@ -369,8 +369,16 @@ export class ReportController {
 
             const yearNum = year ? Number(year) : new Date().getFullYear()
 
-            // Build query
-            const query: any = { year: yearNum }
+            // Build query: find balances whose period overlaps with the selected year.
+            // Using year alone misses staff whose contract anniversary period started
+            // in the previous year (e.g. period Jun 2025 - Jun 2026 has year=2025,
+            // but should appear in a 2026 report).
+            const yearStart = new Date(`${yearNum}-01-01T00:00:00.000Z`)
+            const yearEnd = new Date(`${yearNum}-12-31T23:59:59.999Z`)
+            const query: any = {
+                periodStart: { $lte: yearEnd },
+                periodEnd: { $gte: yearStart },
+            }
 
             if (staffId) {
                 query.staff = staffId
@@ -1796,7 +1804,9 @@ export class ReportController {
             "Staff Name",
             "Department",
             "Leave Type",
-            "Total",
+            "Allocated",
+            "Accrued",
+            "Adjustment",
             "Used",
             "Remaining",
             "Available for Request",
@@ -1810,6 +1820,8 @@ export class ReportController {
             b.staff.department || "",
             b.leaveType,
             b.total,
+            b.accrued || 0,
+            b.adjustment || 0,
             b.used,
             b.remaining,
             b.availableForRequest,
