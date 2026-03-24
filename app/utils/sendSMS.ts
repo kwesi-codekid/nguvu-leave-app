@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import axios from "axios"
 
-const SMS_API_KEY = process.env.SMSONLINE_API_KEY
+const SMS_API_KEY = process.env.SMS_API_KEY
 
 // Normalize phone number
 function normalizePhoneNumber(phoneNumber: string): string | false {
@@ -22,25 +22,22 @@ function normalizePhoneNumber(phoneNumber: string): string | false {
 
 // HTTP POST request
 async function httpPost(data: any): Promise<any> {
-    const url = "https://api.smsonlinegh.com/v5/message/sms/send"
+    const url = process.env.SMS_API_URL as string
 
     const headers = {
-        Authorization: `key ${SMS_API_KEY}`,
+        Authorization: `Bearer ${SMS_API_KEY as string}`,
         "Content-Type": "application/json",
         Accept: "application/json",
-        Host: "api.smsonlinegh.com",
     }
 
     try {
         const { data: responseData } = await axios.post(url, data, { headers })
 
-        const destination = responseData?.data?.destinations?.[0]
-
-        if (destination?.status?.label === "DS_REJECTED_SENDER_UNREGISTERED") {
+        if (responseData?.status === "FAILED") {
             throw new Error("Failed to send SMS: Unregistered sender")
         }
 
-        console.log("sms delivery", destination)
+        console.log("sms delivery", responseData)
         return responseData
     } catch (error: any) {
         console.error("sms error", error)
@@ -62,10 +59,10 @@ async function sendSMS({
     if (!phone) return false
 
     const data = {
-        sender: "ARL Leave",
-        type: 0,
-        destinations: [phone],
-        text: smsText,
+        from: "Nguvu",
+        refId: `nguvu_leave_ref_${Date.now()}`,
+        to: phone,
+        message: smsText,
     }
 
     try {
