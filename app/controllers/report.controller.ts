@@ -384,12 +384,11 @@ export class ReportController {
                 query.staff = staffId
             }
 
-            if (
-                leaveType &&
-                Object.values(LeaveTypes).includes(leaveType as LeaveTypes)
-            ) {
-                query.leaveType = leaveType
-            }
+            // Default to annual leave if no leave type specified
+            const effectiveLeaveType = leaveType && Object.values(LeaveTypes).includes(leaveType as LeaveTypes)
+                ? leaveType
+                : LeaveTypes.ANNUAL
+            query.leaveType = effectiveLeaveType
 
             // Get balances with staff population
             let balances = await LeaveBalance.find(query)
@@ -471,8 +470,12 @@ export class ReportController {
                     }
                 }
 
-                // Calculate available for request
-                const availableForRequest = balance.availableForRequest
+                // Compute virtuals manually since .lean() strips them
+                const base = balance.leaveType === LeaveTypes.ANNUAL
+                    ? (balance.accrued || 0)
+                    : balance.allocated
+                const remaining = base + (balance.adjustments || 0) - balance.used
+                const availableForRequest = Math.max(0, balance.allocated - balance.used)
 
                 // Add to per staff per type
                 const record = {
@@ -487,7 +490,7 @@ export class ReportController {
                     accrued: balance.accrued,
                     adjustment: balance.adjustments,
                     used: balance.used,
-                    remaining: balance.remaining,
+                    remaining,
                     availableForRequest,
                     utilizationPercent:
                         balance.allocated > 0
@@ -495,7 +498,7 @@ export class ReportController {
                                   (balance.used / balance.allocated) * 100
                               )
                             : 0,
-                    isLowBalance: balance.remaining <= threshold,
+                    isLowBalance: remaining <= threshold,
                     lastUpdated: balance.updatedAt,
                 }
 
@@ -503,11 +506,11 @@ export class ReportController {
                 staffUtilization[staffKey].balances.push(record)
 
                 // Check for low balance
-                if (balance.remaining <= threshold) {
+                if (remaining <= threshold) {
                     stats.lowBalance.push({
                         staff: record.staff,
                         leaveType: balance.leaveType,
-                        remaining: balance.remaining,
+                        remaining,
                         threshold,
                     })
                 }
@@ -527,12 +530,12 @@ export class ReportController {
                     balance.allocated
                 stats.byLeaveType[balance.leaveType].totalUsed += balance.used
                 stats.byLeaveType[balance.leaveType].totalRemaining +=
-                    balance.remaining
+                    remaining
 
                 // Totals
                 stats.totals.totalAllocated += balance.allocated
                 stats.totals.totalUsed += balance.used
-                stats.totals.totalRemaining += balance.remaining
+                stats.totals.totalRemaining += remaining
                 stats.totals.totalAvailableForRequest += availableForRequest
             }
 
@@ -1804,14 +1807,9 @@ export class ReportController {
             "Staff Name",
             "Department",
             "Leave Type",
-            "Allocated",
             "Accrued",
-            "Adjustment",
             "Used",
             "Remaining",
-            "Available for Request",
-            "Utilization %",
-            "Low Balance",
         ]
 
         const rows = balances.map((b) => [
@@ -1819,14 +1817,9 @@ export class ReportController {
             b.staff.name,
             b.staff.department || "",
             b.leaveType,
-            b.total,
             b.accrued || 0,
-            b.adjustment || 0,
             b.used,
             b.remaining,
-            b.availableForRequest,
-            b.utilizationPercent,
-            b.isLowBalance ? "Yes" : "No",
         ])
 
         return [headers.join(","), ...rows.map((row) => row.join(","))].join(
