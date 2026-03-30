@@ -142,23 +142,17 @@ export class EmailQueueService {
           // We need to bypass the normal EmailService.sendEmail method
           // to avoid it re-queuing the email, and send directly instead
           
-          console.log(`[EmailQueue] Sending email ${email._id} directly via SMTP to: ${Array.isArray(email.to) ? email.to.join(', ') : email.to}`);
-          
-          const fromEmail = process.env.FROM_EMAIL || "nf@adamusgh.com";
-          const recipients = Array.isArray(email.to) ? email.to.join(",") : email.to;
-          
+          console.log(`[EmailQueue] Sending email ${email._id} to: ${Array.isArray(email.to) ? email.to.join(', ') : email.to}`);
+
           const mailOptions = {
-            from: fromEmail,
-            to: recipients,
+            to: email.to,
             subject: email.subject,
             html: email.html,
             attachments: email.attachments || [],
-            ...(email.cc && { cc: Array.isArray(email.cc) ? email.cc.join(",") : email.cc }),
-            ...(email.bcc && { bcc: Array.isArray(email.bcc) ? email.bcc.join(",") : email.bcc }),
+            ...(email.cc && { cc: email.cc }),
+            ...(email.bcc && { bcc: email.bcc }),
           };
-          
-          // Send the email directly using the EmailService's direct send method
-          // This bypasses the queue check and sends directly via SMTP
+
           await EmailService.directSendMail(mailOptions);
           
           // Update the email status to sent
