@@ -90,7 +90,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         const session = await setSessionData(request, sessionData)
 
-        return redirect(`/dashboard`, {
+        // Redirect to intended page if specified, otherwise dashboard
+        const redirectTo = url.searchParams.get("redirectTo")
+        const destination = redirectTo && redirectTo.startsWith("/") ? redirectTo : "/dashboard"
+
+        return redirect(destination, {
             headers: {
                 "Set-Cookie": await commitSession(session),
             },

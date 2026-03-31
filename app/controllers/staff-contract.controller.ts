@@ -466,6 +466,71 @@ export class StaffContractController {
                     },
                 })
 
+            // Sync leave balance periods when contract dates change
+            if (updates.endDate || updates.startDate) {
+                try {
+                    const staffId = (contract.staff as any)._id.toString()
+                    const effectiveStartDate = updates.startDate || contract.startDate
+                    const effectiveEndDate = updates.endDate || contract.endDate
+
+                    // Recompute the current period with updated contract dates
+                    const newPeriod = getContractPeriod(
+                        { startDate: effectiveStartDate, endDate: effectiveEndDate },
+                        new Date()
+                    )
+
+                    if (newPeriod) {
+                        // Compute the old period to find existing balance records
+                        const oldPeriod = getContractPeriod(
+                            { startDate: contract.startDate, endDate: contract.endDate },
+                            new Date()
+                        )
+
+                        if (oldPeriod) {
+                            const oldNormalizedStart = new Date(oldPeriod.periodStart)
+                            oldNormalizedStart.setHours(0, 0, 0, 0)
+
+                            // Find all balance records for the old period
+                            const balances = await LeaveBalance.find({
+                                staff: staffId,
+                                periodStart: oldNormalizedStart,
+                            })
+
+                            const newPeriodEnd = new Date(newPeriod.periodEnd)
+                            const newTotalMonths = getTotalMonthsInPeriod(newPeriod.periodStart, newPeriod.periodEnd)
+
+                            for (const balance of balances) {
+                                balance.periodEnd = newPeriodEnd
+
+                                // Recalculate allocated days for the new period length
+                                if (balance.leaveType === LeaveTypes.ANNUAL) {
+                                    balance.allocated = newTotalMonths * 2.5
+                                } else {
+                                    const proRateFactor = newTotalMonths / 12
+                                    balance.allocated = Math.round((LEAVE_CAPS[balance.leaveType as LeaveTypes] || 0) * proRateFactor)
+                                }
+
+                                await balance.save()
+
+                                // Recalculate accrual with updated period
+                                if (!balance.manuallySet) {
+                                    await balance.updateAccrual(new Date())
+                                }
+                            }
+
+                            if (balances.length > 0) {
+                                console.log(
+                                    `Updated ${balances.length} leave balance period(s) for staff ${staffId} to ${formatPeriod(newPeriod.periodStart, newPeriod.periodEnd)}`
+                                )
+                            }
+                        }
+                    }
+                } catch (balanceError) {
+                    console.error("Error syncing leave balance periods:", balanceError)
+                    // Don't fail the contract update if balance sync fails
+                }
+            }
+
             // Log to audit
             await AuditLogController.createAuditLog({
                 action: AuditAction.STAFF_UPDATED,

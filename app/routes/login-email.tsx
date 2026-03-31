@@ -86,6 +86,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const email = formData.get("email");
   const phone = formData.get("phone");
 
+  // Preserve redirectTo across the login flow
+  const url = new URL(request.url);
+  const redirectTo = url.searchParams.get("redirectTo") || ""
+  const redirectParam = redirectTo ? `&redirectTo=${encodeURIComponent(redirectTo)}` : ""
+
   // Handle phone login (send OTP)
   if (phone && !email) {
     try {
@@ -101,7 +106,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         title: "OTP sent successfully",
       });
 
-      return redirect(`/verify-otp?phone=${phone}`, {
+      return redirect(`/verify-otp?phone=${phone}${redirectParam}`, {
         headers: {
           "Set-Cookie": await commitFlashSession(flashSession),
         },
@@ -145,7 +150,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         title: "OTP sent successfully",
       });
 
-      return redirect(`/verify-otp?email=${email}`, {
+      return redirect(`/verify-otp?email=${email}${redirectParam}`, {
         headers: {
           "Set-Cookie": await commitFlashSession(flashSession),
         },

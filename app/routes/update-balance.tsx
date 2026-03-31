@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react"
 import { useLoaderData, useFetcher } from "react-router"
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router"
+import { redirect } from "react-router"
 import {
     Button,
     Input,
@@ -19,12 +20,14 @@ import connectDB from "~/database/connect"
 import Staff from "~/models/staff.model"
 import StaffContract from "~/models/staff-contract.model"
 import LeaveBalance from "~/models/leave-balance.model"
-import { LeaveTypes, Gender, LEAVE_CAPS } from "~/utils/types"
+import { LeaveTypes, Gender, LEAVE_CAPS, AuditAction } from "~/utils/types"
 import {
     getContractPeriod,
     getTotalMonthsInPeriod,
     formatPeriod,
 } from "~/utils/contract-period"
+import { isAuthenticated, getSessionData } from "~/auth-session"
+import AuditLogController from "~/controllers/audit-log.controller"
 
 interface StaffRow {
     _id: string
@@ -41,6 +44,20 @@ interface StaffRow {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+    const authenticated = await isAuthenticated(request)
+    if (!authenticated) {
+        return redirect("/login-email?redirectTo=/update-balance")
+    }
+
+    const sessionData = await getSessionData(request)
+    const isHROrAdmin =
+        sessionData?.user?.permissions?.includes("HR") ||
+        sessionData?.user?.permissions?.includes("ADMIN")
+
+    if (!isHROrAdmin) {
+        return redirect("/dashboard")
+    }
+
     await connectDB()
 
     // Batch fetch: all staff, all active contracts, then relevant balances
@@ -164,6 +181,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+    const authenticated = await isAuthenticated(request)
+    if (!authenticated) {
+        return { status: "error", message: "Unauthorized" }
+    }
+
+    const sessionData = await getSessionData(request)
+    const isHROrAdmin =
+        sessionData?.user?.permissions?.includes("HR") ||
+        sessionData?.user?.permissions?.includes("ADMIN")
+
+    if (!isHROrAdmin) {
+        return { status: "error", message: "Insufficient permissions" }
+    }
+
     await connectDB()
 
     const body = await request.json()
@@ -249,6 +280,8 @@ export async function action({ request }: ActionFunctionArgs) {
                 leaveType: LeaveTypes.ANNUAL,
             })
 
+            const oldAccrued = annualBalance?.accrued ?? null
+
             if (annualBalance) {
                 annualBalance.accrued = accrued
                 annualBalance.allocated = allocated
@@ -267,6 +300,33 @@ export async function action({ request }: ActionFunctionArgs) {
                 })
                 await annualBalance.save()
             }
+
+            // Audit log for the balance update
+            await AuditLogController.createAuditLog({
+                action: AuditAction.BALANCE_ADJUSTED,
+                entityType: "LeaveBalance",
+                entityId: annualBalance._id,
+                performedBy: sessionData.user!._id,
+                performedByName: sessionData.user!.name,
+                performedByEmail: sessionData.user!.email,
+                description: `Manually set annual leave accrual for ${staff.name} (${staff.staffId}) to ${accrued} days via Update Balance page`,
+                changes: oldAccrued !== null
+                    ? [{
+                        field: "accrued",
+                        oldValue: oldAccrued,
+                        newValue: accrued,
+                        fieldLabel: "Accrued Balance",
+                    }]
+                    : undefined,
+                metadata: {
+                    staffName: staff.name,
+                    staffId: staff.staffId,
+                    period: formatPeriod(period.periodStart, period.periodEnd),
+                    allocated,
+                    newAccrued: accrued,
+                    oldAccrued,
+                },
+            })
 
             // Create other leave type balances if they don't exist
             const otherLeaveTypes = Object.values(LeaveTypes).filter(
