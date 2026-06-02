@@ -475,7 +475,7 @@ export class ReportController {
                     ? (balance.accrued || 0)
                     : balance.allocated
                 const remaining = base + (balance.adjustments || 0) - balance.used
-                const availableForRequest = Math.max(0, balance.allocated - balance.used)
+                const availableForRequest = Math.max(0, balance.allocated + (balance.adjustments || 0) - balance.used)
 
                 // Add to per staff per type
                 const record = {
@@ -487,7 +487,9 @@ export class ReportController {
                     },
                     leaveType: balance.leaveType,
                     total: balance.allocated,
-                    accrued: balance.accrued,
+                    // Accrued reported to the UI includes carried-over/adjusted days
+                    // so it flows correctly into the remaining/available columns.
+                    accrued: (balance.accrued || 0) + (balance.adjustments || 0),
                     adjustment: balance.adjustments,
                     used: balance.used,
                     remaining,

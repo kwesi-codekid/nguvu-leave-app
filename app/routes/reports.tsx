@@ -743,8 +743,9 @@ export default function Reports() {
                                     .filter((r: any) => r.leaveType === "annual")
                                     .map((r: any) => ({
                                         ...r,
+                                        // accrued already includes carry-over/adjustment from the API
                                         computedRemaining: (r.accrued || 0) - (r.used || 0),
-                                        computedAvailable: (r.total || 0) - (r.used || 0),
+                                        computedAvailable: r.availableForRequest ?? ((r.total || 0) - (r.used || 0)),
                                     }))
                                     .sort((a: any, b: any) => b.used - a.used)
 
