@@ -1,4 +1,5 @@
 import { ResponseObject, UserInterface, Companies } from "./types"
+import { logger } from "./logger"
 
 /**
  * Create a success response object
@@ -51,6 +52,7 @@ export function successResponse<T = any>(
     data?: T,
     statusCode: number = 200
 ) {
+    logger.api(`${statusCode} success - ${message}`)
     return Response.json(successResponseObject(message, data), {
         status: statusCode,
     })
@@ -65,6 +67,7 @@ export function errorResponse(
     data?: any,
     statusCode: number = 400
 ) {
+    logger.api(`${statusCode} error - ${message}`)
     return Response.json(errorResponseObject(message, data), {
         status: statusCode,
     })
@@ -79,6 +82,7 @@ export function validationErrorResponse(
     errors: Array<{ field: string; message: string }>,
     statusCode: number = 422
 ) {
+    logger.api(`${statusCode} validation_error - ${message}`)
     return Response.json(validationErrorResponseObject(message, errors), {
         status: statusCode,
     })

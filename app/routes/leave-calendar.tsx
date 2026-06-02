@@ -146,16 +146,7 @@ export default function LeaveCalendar() {
         const daysToSaturday = endOfMonthWeekday === 7 ? 6 : 6 - endOfMonthWeekday
         const endOfWeek = endOfMonth.plus({ days: daysToSaturday })
 
-        console.log("Calendar debug:", {
-            currentMonth: currentMonth.toFormat("yyyy-MM-dd"),
-            startOfMonth: startOfMonth.toFormat("yyyy-MM-dd"),
-            endOfMonth: endOfMonth.toFormat("yyyy-MM-dd"),
-            startOfWeek: startOfWeek.toFormat("yyyy-MM-dd"),
-            endOfWeek: endOfWeek.toFormat("yyyy-MM-dd"),
-            startOfMonthWeekday: startOfMonthWeekday,
-            startOfWeekDay: startOfWeek.weekday,
-            startOfWeekDayName: startOfWeek.toFormat("EEEE"),
-        })
+        
 
         const days = []
         let current = startOfWeek
@@ -179,11 +170,7 @@ export default function LeaveCalendar() {
             current = current.plus({ days: 1 })
         }
 
-        console.log("Generated days:", days.map(d => ({
-            date: d.date.toFormat("yyyy-MM-dd EEE"),
-            isCurrentMonth: d.isCurrentMonth,
-            weekday: d.date.weekday
-        })))
+      
 
         return days
     }

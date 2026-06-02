@@ -1,4 +1,6 @@
 import mongoose from "mongoose"
+import { CronService } from "../services/cron.service"
+import { logger } from "../utils/logger"
 
 // Import all models to ensure they're registered
 import "../models/staff.model"
@@ -16,11 +18,11 @@ const MONGODB_URI = process.env.MONGODB_URI as string
 // "mongodb://root:wxWQOv0j8a35ufoAHKwEbI5er9C6ejCdnblRV7IVU8aFRqenK6SL0tdF5qEiE1EC@206.189.29.230:3311/nguvu-leave?directConnection=true&authSource=admin";
 
 let isConnected = false
+let cronStarted = false
 
 export const connectDB = async () => {
     // If already connected, return
     if (isConnected) {
-        console.log(MONGODB_URI + " is connected")
         return Promise.resolve()
     }
 
@@ -34,11 +36,18 @@ export const connectDB = async () => {
         await mongoose.connect(MONGODB_URI, options)
 
         isConnected = true
-        console.log("MongoDB connected successfully")
+
+        // Start scheduled jobs once, after the first successful DB connection.
+        // The server is a long-lived process (react-router-serve), so node-cron
+        // schedules persist for the lifetime of the process.
+        if (!cronStarted) {
+            cronStarted = true
+            CronService.init()
+        }
 
         return Promise.resolve()
     } catch (error) {
-        console.error("MongoDB connection error:", error)
+        logger.error("MongoDB connection error:", error)
         return Promise.reject(error)
     }
 }

@@ -162,8 +162,7 @@ export async function action({ request }: ActionFunctionArgs) {
         await connectDB()
         const body = await request.json()
 
-        console.log("Holiday create body:", body)
-        console.log("User:", user?.name, "Permissions:", user?.permissions)
+      
 
         // Prepare request object for controller
         const req = {
@@ -177,7 +176,6 @@ export async function action({ request }: ActionFunctionArgs) {
         } as any
 
         const result = await HolidayController.createHoliday(req)
-        console.log("Holiday create result:", result)
 
         if (result.status !== "success") {
             if (result.errors) {

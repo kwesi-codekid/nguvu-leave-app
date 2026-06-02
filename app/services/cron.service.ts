@@ -4,6 +4,7 @@ import Staff from "../models/staff.model"
 import StaffContract from "../models/staff-contract.model"
 import LeaveBalance from "../models/leave-balance.model"
 import { AccountStatus, ContractStatus } from "../utils/types"
+import { logger } from "../utils/logger"
 
 /**
  * CronService handles all scheduled jobs for the leave management system
@@ -13,7 +14,7 @@ export class CronService {
      * Initialize all cron jobs
      */
     static init(): void {
-        console.log("Initializing cron jobs...")
+        logger.cron("Initializing cron jobs...")
         this.scheduleLeaveAccumulation()
         this.scheduleContractAnniversaryCheck()
     }
@@ -45,8 +46,8 @@ export class CronService {
                         })
 
                         if (!activeContract) {
-                            console.log(
-                                `[Cron] Skipping staff ${staff._id} (${staff.name}) - no active contract`
+                            logger.cron(
+                                `Skipping staff ${staff._id} (${staff.name}) - no active contract`
                             )
                             skippedCount++
                             continue
@@ -62,7 +63,7 @@ export class CronService {
                         })
 
                         if (!leaveBalance) {
-                            console.error(
+                            logger.error(
                                 `[Cron] No annual leave balance found for staff: ${staff._id} (${staff.name}) in current period`
                             )
                             errorCount++
@@ -73,7 +74,7 @@ export class CronService {
                         await leaveBalance.updateAccrual()
                         updatedCount++
                     } catch (error) {
-                        console.error(
+                        logger.error(
                             `[Cron] Error updating leave balance for staff ${staff._id}:`,
                             error
                         )
@@ -81,15 +82,15 @@ export class CronService {
                     }
                 }
 
-                console.log(
-                    `[Cron] Leave accumulation complete. Updated: ${updatedCount}, Skipped (no contract): ${skippedCount}, Errors: ${errorCount}`
-                );
+                logger.cron(
+                    `Leave accumulation complete. Updated: ${updatedCount}, Skipped (no contract): ${skippedCount}, Errors: ${errorCount}`
+                )
             } catch (error) {
-                console.error("[Cron] Error in leave accumulation job:", error)
+                logger.error("[Cron] Error in leave accumulation job:", error)
             }
         })
 
-        console.log(
+        logger.cron(
             "Annual leave accumulation job scheduled to run on the first day of each month"
         )
     }
@@ -110,19 +111,19 @@ export class CronService {
                 const newPeriodCount = await LeaveBalance.createNewPeriodBalances()
 
                 if (newPeriodCount > 0) {
-                    console.log(
-                        `[Cron] Contract anniversary check complete. New period balances created for ${newPeriodCount} staff`
+                    logger.cron(
+                        `Contract anniversary check complete. New period balances created for ${newPeriodCount} staff`
                     )
                 }
             } catch (error) {
-                console.error(
+                logger.error(
                     "[Cron] Error in contract anniversary check job:",
                     error
                 )
             }
         })
 
-        console.log(
+        logger.cron(
             "Contract anniversary check job scheduled to run daily at midnight"
         )
     }

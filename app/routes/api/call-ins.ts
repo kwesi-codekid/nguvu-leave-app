@@ -374,9 +374,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
             default: {
                 // Default POST - create single call-in with automatic notification
-                console.log("[CallIn API] Creating call-in with body:", body)
-                console.log("[CallIn API] User:", user?.name, "Permissions:", user?.permissions)
-
+               
                 // Check if user can create call-ins (HR/Admin unrestricted, or position-based approver)
                 let hasPermission =
                     user?.permissions?.includes("HR") ||
@@ -410,7 +408,6 @@ export async function action({ request }: ActionFunctionArgs) {
                 }
 
                 const result = await CallInController.createCallIn(req)
-                console.log("[CallIn API] Controller result:", result.status, result.message, result.errors)
 
                 if (result.status !== "success") {
                     if (result.errors) {
