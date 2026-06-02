@@ -124,8 +124,10 @@ LeaveBalanceSchema.virtual("remaining").get(function () {
 
 // Virtual for available for request (max requestable for all types)
 LeaveBalanceSchema.virtual("availableForRequest").get(function () {
-    // Can request up to allocated days total, even if not yet fully accrued
-    return Math.max(0, this.allocated - this.used)
+    // Can request up to allocated days total, even if not yet fully accrued.
+    // Adjustments (e.g. carried-over leave from a previous year) are added on
+    // top of the allocation so they are genuinely requestable, not just shown.
+    return Math.max(0, this.allocated + (this.adjustments || 0) - this.used)
 })
 
 // Virtual for formatted period label
@@ -138,8 +140,9 @@ LeaveBalanceSchema.virtual("periodLabel").get(function () {
 
 // Instance method to check if request is allowed
 LeaveBalanceSchema.methods.canRequest = function (days: number): boolean {
-    // Can request up to allocated days total (even if not yet fully accrued)
-    return this.used + days <= this.allocated
+    // Can request up to allocated + adjustments total (even if not yet fully
+    // accrued). Adjustments include carried-over leave, which is spendable.
+    return this.used + days <= this.allocated + (this.adjustments || 0)
 }
 
 // Instance method to debit balance

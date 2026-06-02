@@ -253,8 +253,9 @@ export class LeaveBalanceController {
                     : balance.allocated
                 const remaining = base + (balance.adjustments || 0) - balance.used
 
-                // Can request up to allocated - used (full allocation, not just accrued)
-                const availableForRequest = Math.max(0, balance.allocated - balance.used)
+                // Can request up to allocated + adjustments - used (full allocation
+                // plus any carried-over/adjusted days, not just accrued)
+                const availableForRequest = Math.max(0, balance.allocated + (balance.adjustments || 0) - balance.used)
 
                 // Monthly rate for display
                 const totalPeriodMonths = balance.periodStart && balance.periodEnd
@@ -570,7 +571,7 @@ export class LeaveBalanceController {
                     (balance.adjustments || 0) -
                     balance.used
 
-                const available = Math.max(0, balance.allocated - balance.used)
+                const available = Math.max(0, balance.allocated + (balance.adjustments || 0) - balance.used)
 
                 byLeaveType[balance.leaveType].totalAllocated +=
                     balance.allocated
@@ -1852,7 +1853,7 @@ export class LeaveBalanceController {
                     (balance.adjustments || 0) -
                     balance.used
 
-                const available = Math.max(0, balance.allocated - balance.used)
+                const available = Math.max(0, balance.allocated + (balance.adjustments || 0) - balance.used)
 
                 lt.totalStaff++
                 lt.totalAllocated += balance.allocated

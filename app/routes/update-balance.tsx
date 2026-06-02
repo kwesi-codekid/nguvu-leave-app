@@ -166,10 +166,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
                 const balance = balanceMap.get(staffIdStr)
                 if (balance) {
-                    row.currentAccrued = balance.accrued || 0
+                    // Editable value = accrued (formula) + adjustments (carry-over).
+                    // This is the staff's total entitlement for the period before
+                    // subtracting used days, so re-saving the shown number is a no-op.
+                    row.currentAccrued = (balance.accrued || 0) + (balance.adjustments || 0)
                     row.used = balance.used || 0
-                    const base = balance.accrued || 0
-                    row.remaining = base + (balance.adjustments || 0) - (balance.used || 0)
+                    row.remaining = (balance.accrued || 0) + (balance.adjustments || 0) - (balance.used || 0)
                 }
             }
 
@@ -280,26 +282,36 @@ export async function action({ request }: ActionFunctionArgs) {
                 leaveType: LeaveTypes.ANNUAL,
             })
 
-            const oldAccrued = annualBalance?.accrued ?? null
-
-            if (annualBalance) {
-                annualBalance.accrued = accrued
-                annualBalance.allocated = allocated
-                annualBalance.manuallySet = true
-                await annualBalance.save()
-            } else {
+            // Ensure the balance record exists for this period
+            if (!annualBalance) {
                 annualBalance = new LeaveBalance({
                     staff: staffObjectId,
                     periodStart: normalizedStart,
                     periodEnd: new Date(period.periodEnd),
                     leaveType: LeaveTypes.ANNUAL,
                     allocated,
-                    accrued,
+                    accrued: 0,
                     used: 0,
                     adjustments: 0,
                 })
                 await annualBalance.save()
             }
+
+            const oldTotal =
+                (annualBalance.accrued || 0) + (annualBalance.adjustments || 0)
+
+            // Keep accrued driven by the monthly formula (do NOT freeze), so the
+            // staff continues to accrue 2.5/month via the cron. Bring accrued up
+            // to date first, then record the difference between the entered total
+            // and the formula value as an adjustment (e.g. carried-over days).
+            // The adjustment rides on top of accrual and self-clears next period.
+            annualBalance.allocated = allocated
+            annualBalance.manuallySet = false
+            await annualBalance.updateAccrual()
+
+            const formulaAccrued = annualBalance.accrued || 0
+            annualBalance.adjustments = +(accrued - formulaAccrued).toFixed(2)
+            await annualBalance.save()
 
             // Audit log for the balance update
             await AuditLogController.createAuditLog({
@@ -309,22 +321,22 @@ export async function action({ request }: ActionFunctionArgs) {
                 performedBy: sessionData.user!._id,
                 performedByName: sessionData.user!.name,
                 performedByEmail: sessionData.user!.email,
-                description: `Manually set annual leave accrual for ${staff.name} (${staff.staffId}) to ${accrued} days via Update Balance page`,
-                changes: oldAccrued !== null
-                    ? [{
-                        field: "accrued",
-                        oldValue: oldAccrued,
-                        newValue: accrued,
-                        fieldLabel: "Accrued Balance",
-                    }]
-                    : undefined,
+                description: `Set annual leave balance for ${staff.name} (${staff.staffId}) to ${accrued} days via Update Balance page (formula ${formulaAccrued} + carry-over/adjustment ${annualBalance.adjustments}; accrual continues)`,
+                changes: [{
+                    field: "balance",
+                    oldValue: oldTotal,
+                    newValue: accrued,
+                    fieldLabel: "Annual Leave Balance",
+                }],
                 metadata: {
                     staffName: staff.name,
                     staffId: staff.staffId,
                     period: formatPeriod(period.periodStart, period.periodEnd),
                     allocated,
-                    newAccrued: accrued,
-                    oldAccrued,
+                    enteredTotal: accrued,
+                    formulaAccrued,
+                    adjustment: annualBalance.adjustments,
+                    oldTotal,
                 },
             })
 
@@ -488,8 +500,11 @@ export default function UpdateBalance() {
                     Update Leave Balances
                 </h1>
                 <p className="text-zinc-500 dark:text-zinc-400 text-sm mb-6">
-                    Set annual leave accrued balances for staff. Other leave type
-                    balances will be auto-created if missing.
+                    Set each staff member's total annual leave balance for the
+                    current period (e.g. to add carried-over days from a previous
+                    year). Monthly accrual of 2.5 days keeps running on top — the
+                    balance is not frozen. Other leave type balances are
+                    auto-created if missing.
                 </p>
 
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
@@ -538,7 +553,7 @@ export default function UpdateBalance() {
                             <TableColumn>NAME</TableColumn>
                             <TableColumn>DEPARTMENT</TableColumn>
                             <TableColumn>PERIOD</TableColumn>
-                            <TableColumn>ANNUAL LEAVE (ACCRUED)</TableColumn>
+                            <TableColumn>ANNUAL LEAVE (TOTAL)</TableColumn>
                             <TableColumn>REMAINING</TableColumn>
                         </TableHeader>
                         <TableBody emptyContent="No staff found">
