@@ -23,6 +23,7 @@ import LeaveBalance from "~/models/leave-balance.model"
 import { LeaveTypes, Gender, LEAVE_CAPS, AuditAction } from "~/utils/types"
 import {
     getContractPeriod,
+    getMonthsInPeriod,
     getTotalMonthsInPeriod,
     formatPeriod,
 } from "~/utils/contract-period"
@@ -301,15 +302,27 @@ export async function action({ request }: ActionFunctionArgs) {
                 (annualBalance.accrued || 0) + (annualBalance.adjustments || 0)
 
             // Keep accrued driven by the monthly formula (do NOT freeze), so the
-            // staff continues to accrue 2.5/month via the cron. Bring accrued up
-            // to date first, then record the difference between the entered total
-            // and the formula value as an adjustment (e.g. carried-over days).
-            // The adjustment rides on top of accrual and self-clears next period.
+            // staff continues to accrue 2.5/month via the cron. The formula value
+            // is computed and assigned directly rather than via updateAccrual(),
+            // which can only raise the stored value and so cannot repair legacy
+            // records where an entered total was written straight into accrued.
+            // The difference between the entered total and the formula value is
+            // recorded as an adjustment (e.g. carried-over days) that rides on
+            // top of accrual and self-clears next period.
+            const now = new Date()
+            const effectiveDate =
+                now > period.periodEnd ? period.periodEnd : now
+            const monthlyRate = totalMonths > 0 ? allocated / totalMonths : 0
+            const formulaAccrued = +Math.min(
+                allocated,
+                getMonthsInPeriod(period.periodStart, effectiveDate) *
+                    monthlyRate
+            ).toFixed(2)
+
             annualBalance.allocated = allocated
             annualBalance.manuallySet = false
-            await annualBalance.updateAccrual()
-
-            const formulaAccrued = annualBalance.accrued || 0
+            annualBalance.accrued = formulaAccrued
+            annualBalance.lastAccrualAt = effectiveDate
             annualBalance.adjustments = +(accrued - formulaAccrued).toFixed(2)
             await annualBalance.save()
 

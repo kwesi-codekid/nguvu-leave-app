@@ -475,7 +475,7 @@ export class ReportController {
                     ? (balance.accrued || 0)
                     : balance.allocated
                 const remaining = base + (balance.adjustments || 0) - balance.used
-                const availableForRequest = Math.max(0, balance.allocated + (balance.adjustments || 0) - balance.used)
+                const availableForRequest = Math.max(0, Math.max(balance.allocated, balance.accrued || 0) + (balance.adjustments || 0) - balance.used)
 
                 // Add to per staff per type
                 const record = {
