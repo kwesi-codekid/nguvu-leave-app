@@ -301,57 +301,73 @@ export async function action({ request }: ActionFunctionArgs) {
             const oldTotal =
                 (annualBalance.accrued || 0) + (annualBalance.adjustments || 0)
 
-            // Keep accrued driven by the monthly formula (do NOT freeze), so the
-            // staff continues to accrue 2.5/month via the cron. The formula value
-            // is computed and assigned directly rather than via updateAccrual(),
-            // which can only raise the stored value and so cannot repair legacy
-            // records where an entered total was written straight into accrued.
-            // The difference between the entered total and the formula value is
-            // recorded as an adjustment (e.g. carried-over days) that rides on
-            // top of accrual and self-clears next period.
-            const now = new Date()
-            const effectiveDate =
-                now > period.periodEnd ? period.periodEnd : now
-            const monthlyRate = totalMonths > 0 ? allocated / totalMonths : 0
-            const formulaAccrued = +Math.min(
-                allocated,
-                getMonthsInPeriod(period.periodStart, effectiveDate) *
-                    monthlyRate
-            ).toFixed(2)
+            // "Save All" submits every populated row, not just edited ones.
+            // Only rewrite the balance when the entered total actually differs
+            // from the stored total — re-splitting an unchanged total is not a
+            // no-op for legacy records whose accrued exceeds the allocation cap
+            // (it would move the excess into adjustments and change how many
+            // days are requestable).
+            const totalChanged = +oldTotal.toFixed(2) !== +accrued.toFixed(2)
 
-            annualBalance.allocated = allocated
-            annualBalance.manuallySet = false
-            annualBalance.accrued = formulaAccrued
-            annualBalance.lastAccrualAt = effectiveDate
-            annualBalance.adjustments = +(accrued - formulaAccrued).toFixed(2)
-            await annualBalance.save()
-
-            // Audit log for the balance update
-            await AuditLogController.createAuditLog({
-                action: AuditAction.BALANCE_ADJUSTED,
-                entityType: "LeaveBalance",
-                entityId: annualBalance._id,
-                performedBy: sessionData.user!._id,
-                performedByName: sessionData.user!.name,
-                performedByEmail: sessionData.user!.email,
-                description: `Set annual leave balance for ${staff.name} (${staff.staffId}) to ${accrued} days via Update Balance page (formula ${formulaAccrued} + carry-over/adjustment ${annualBalance.adjustments}; accrual continues)`,
-                changes: [{
-                    field: "balance",
-                    oldValue: oldTotal,
-                    newValue: accrued,
-                    fieldLabel: "Annual Leave Balance",
-                }],
-                metadata: {
-                    staffName: staff.name,
-                    staffId: staff.staffId,
-                    period: formatPeriod(period.periodStart, period.periodEnd),
+            if (totalChanged) {
+                // Keep accrued driven by the monthly formula (do NOT freeze), so the
+                // staff continues to accrue 2.5/month via the cron. The formula value
+                // is computed and assigned directly rather than via updateAccrual(),
+                // which can only raise the stored value and so cannot repair legacy
+                // records where an entered total was written straight into accrued.
+                // The difference between the entered total and the formula value is
+                // recorded as an adjustment (e.g. carried-over days) that rides on
+                // top of accrual and self-clears next period.
+                const now = new Date()
+                const effectiveDate =
+                    now > period.periodEnd ? period.periodEnd : now
+                const monthlyRate =
+                    totalMonths > 0 ? allocated / totalMonths : 0
+                const formulaAccrued = +Math.min(
                     allocated,
-                    enteredTotal: accrued,
-                    formulaAccrued,
-                    adjustment: annualBalance.adjustments,
-                    oldTotal,
-                },
-            })
+                    getMonthsInPeriod(period.periodStart, effectiveDate) *
+                        monthlyRate
+                ).toFixed(2)
+
+                annualBalance.allocated = allocated
+                // Keep the stored period end in sync with the contract; the cron
+                // derives its monthly rate from the stored dates, so a stale
+                // periodEnd would make it accrue at a different rate than the
+                // formula used here.
+                annualBalance.periodEnd = new Date(period.periodEnd)
+                annualBalance.manuallySet = false
+                annualBalance.accrued = formulaAccrued
+                annualBalance.lastAccrualAt = effectiveDate
+                annualBalance.adjustments = +(accrued - formulaAccrued).toFixed(2)
+                await annualBalance.save()
+
+                // Audit log for the balance update
+                await AuditLogController.createAuditLog({
+                    action: AuditAction.BALANCE_ADJUSTED,
+                    entityType: "LeaveBalance",
+                    entityId: annualBalance._id,
+                    performedBy: sessionData.user!._id,
+                    performedByName: sessionData.user!.name,
+                    performedByEmail: sessionData.user!.email,
+                    description: `Set annual leave balance for ${staff.name} (${staff.staffId}) to ${accrued} days via Update Balance page (formula ${formulaAccrued} + carry-over/adjustment ${annualBalance.adjustments}; accrual continues)`,
+                    changes: [{
+                        field: "balance",
+                        oldValue: oldTotal,
+                        newValue: accrued,
+                        fieldLabel: "Annual Leave Balance",
+                    }],
+                    metadata: {
+                        staffName: staff.name,
+                        staffId: staff.staffId,
+                        period: formatPeriod(period.periodStart, period.periodEnd),
+                        allocated,
+                        enteredTotal: accrued,
+                        formulaAccrued,
+                        adjustment: annualBalance.adjustments,
+                        oldTotal,
+                    },
+                })
+            }
 
             // Create other leave type balances if they don't exist
             const otherLeaveTypes = Object.values(LeaveTypes).filter(
@@ -395,7 +411,7 @@ export async function action({ request }: ActionFunctionArgs) {
             results.push({
                 staffId: staff.staffId,
                 status: "success",
-                message: "Updated",
+                message: totalChanged ? "Updated" : "No change",
             })
         } catch (error: any) {
             results.push({
@@ -406,12 +422,17 @@ export async function action({ request }: ActionFunctionArgs) {
         }
     }
 
-    const successCount = results.filter((r) => r.status === "success").length
+    const changedCount = results.filter(
+        (r) => r.status === "success" && r.message === "Updated"
+    ).length
+    const unchangedCount = results.filter(
+        (r) => r.status === "success" && r.message === "No change"
+    ).length
     const errorCount = results.filter((r) => r.status === "error").length
 
     return {
         status: errorCount === 0 ? "success" : "partial",
-        message: `${successCount} updated, ${errorCount} failed`,
+        message: `${changedCount} updated, ${unchangedCount} unchanged, ${errorCount} failed`,
         results,
     }
 }

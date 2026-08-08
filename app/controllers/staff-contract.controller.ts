@@ -1277,11 +1277,13 @@ export class StaffContractController {
 
             // Get leave balance summary (period-based)
             const currentDate = new Date()
+            // remaining/availableForRequest are virtuals — select their backing
+            // fields, otherwise they compute from undefined and report 0
             const leaveBalances = await LeaveBalance.find({
                 staff: staffId,
                 periodStart: { $lte: currentDate },
                 periodEnd: { $gte: currentDate },
-            }).select("leaveType remaining availableForRequest")
+            }).select("leaveType allocated accrued adjustments used")
 
             const contractWithDetails = {
                 ...contract,
