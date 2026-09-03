@@ -23,6 +23,7 @@ interface ILeaveBalanceModel extends Model<ILeaveBalance> {
     processMonthlyAccruals(): Promise<number>
     getStaffBalances(staffId: string, periodStart: Date): Promise<ILeaveBalance[]>
     createNewPeriodBalances(): Promise<number>
+    getCarryForward(staffId: string, leaveType: LeaveTypes, periodStart: Date): Promise<{ days: number; from: ILeaveBalance | null }>
 }
 
 // Define the LeaveBalance schema
@@ -316,6 +317,43 @@ LeaveBalanceSchema.methods.resetForNewPeriod = async function (): Promise<ILeave
     return await this.save()
 }
 
+// Static method to work out how many days carry into a new period.
+//
+// Only annual leave carries: every other type is granted its full cap at the
+// start of each period, so there is nothing to bring forward.
+//
+// The carried amount is the closing available balance of the period that ended
+// immediately before this one - i.e. what the staff member could still have
+// taken on its last day. Legacy records hold carried entitlement inside
+// `accrued` (above the pro-rated allocation) while newer ones hold it in
+// `adjustments`, so both are taken into account.
+LeaveBalanceSchema.statics.getCarryForward = async function (
+    staffId: string,
+    leaveType: LeaveTypes,
+    periodStart: Date
+): Promise<{ days: number; from: ILeaveBalance | null }> {
+    if (leaveType !== LeaveTypes.ANNUAL) return { days: 0, from: null }
+
+    const normalizedStart = new Date(periodStart)
+    normalizedStart.setHours(0, 0, 0, 0)
+
+    // The most recent period that had already closed before this one opened.
+    const previous = await this.findOne({
+        staff: staffId,
+        leaveType,
+        periodEnd: { $lt: normalizedStart },
+    })
+        .sort({ periodEnd: -1 })
+        .exec()
+
+    if (!previous) return { days: 0, from: null }
+
+    const earned = Math.max(previous.allocated, previous.accrued || 0)
+    const closing = earned + (previous.adjustments || 0) - (previous.used || 0)
+
+    return { days: Math.max(0, closing), from: previous }
+}
+
 // Static method to get or create a balance record
 LeaveBalanceSchema.statics.getOrCreate = async function (
     staffId: string,
@@ -341,6 +379,14 @@ LeaveBalanceSchema.statics.getOrCreate = async function (
             ? totalPeriodMonths * 2.5
             : (LEAVE_CAPS[leaveType] || 0)
 
+        // Unused entitlement carries into the new period as an adjustment.
+        // Only set on creation, so re-running this never double-credits.
+        const carried = await (this as any).getCarryForward(
+            staffId,
+            leaveType,
+            normalizedStart
+        )
+
         balance = new this({
             staff: staffId,
             periodStart: normalizedStart,
@@ -349,7 +395,10 @@ LeaveBalanceSchema.statics.getOrCreate = async function (
             allocated,
             accrued: 0,
             used: 0,
-            adjustments: 0,
+            adjustments: carried.days,
+            notes: carried.days > 0
+                ? `${new Date().toISOString()}: Carried forward ${carried.days} days from period ${formatPeriod(carried.from!.periodStart, carried.from!.periodEnd)}`
+                : undefined,
         })
 
         // Save first to create the record
