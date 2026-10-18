@@ -10,6 +10,7 @@ import {
     validationErrorResponseObject,
 } from "../utils/api-utils"
 import { AuditAction, ResponseObject, ContractStatus } from "../utils/types"
+import { escapeRegex } from "../utils/regex"
 
 export class JobPositionController {
     /**
@@ -88,7 +89,7 @@ export class JobPositionController {
 
             // Check for duplicate position title in department
             const existingPosition = await JobPosition.findOne({
-                title: new RegExp(`^${title.trim()}$`, "i"),
+                title: new RegExp(`^${escapeRegex(title.trim())}$`, "i"),
                 department,
             })
 
@@ -239,7 +240,7 @@ export class JobPositionController {
                 } else if (title.trim() !== position.title) {
                     // Check for duplicate in same department
                     const duplicate = await JobPosition.findOne({
-                        title: new RegExp(`^${title.trim()}$`, "i"),
+                        title: new RegExp(`^${escapeRegex(title.trim())}$`, "i"),
                         department: (position.department as any)._id,
                         _id: { $ne: id },
                     })
@@ -447,7 +448,7 @@ export class JobPositionController {
 
             // Free text search on title
             if (search && typeof search === "string" && search.trim()) {
-                const searchTerm = search.trim()
+                const searchTerm = escapeRegex(search.trim())
                 query.title = { $regex: searchTerm, $options: "i" }
             }
 

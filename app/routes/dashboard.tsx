@@ -902,7 +902,7 @@ function ManagerDashboard({ data }: { data: any }) {
 
 // Staff Dashboard Component
 function StaffDashboard({ data }: { data: any }) {
-    const { profile, myBalances, requestsSummary, upcomingLeaves, recentRequests, annualAccrualProgress, alerts } = data
+    const { profile, myBalances, requestsSummary, upcomingLeaves, recentRequests, annualAccrualProgress, alerts, periodLabel } = data
 
     // Safety check for profile data
     if (!profile) {
@@ -985,7 +985,7 @@ function StaffDashboard({ data }: { data: any }) {
                                 <PieChart className="size-5 text-primary" />
                                 <h3 className="font-semibold">Leave Balance</h3>
                             </div>
-                            <Chip size="sm" variant="flat">{DateTime.now().year}</Chip>
+                            <Chip size="sm" variant="flat">{periodLabel || DateTime.now().year}</Chip>
                         </div>
                     </CardHeader>
                     <CardBody>
@@ -1154,11 +1154,11 @@ function StaffDashboard({ data }: { data: any }) {
                             </div>
                             <div className="p-3 rounded-xl bg-success-50 dark:bg-success-900/20 text-center">
                                 <p className="text-2xl font-bold text-success-600">{annualAccrualProgress.projectedYearEnd || 0}</p>
-                                <p className="text-xs text-zinc-500">Year-End Projection</p>
+                                <p className="text-xs text-zinc-500">Period Allocation</p>
                             </div>
                             <div className="p-3 rounded-xl bg-warning-50 dark:bg-warning-900/20 text-center">
                                 <p className="text-2xl font-bold text-warning-600">{annualAccrualProgress.percentComplete || 0}%</p>
-                                <p className="text-xs text-zinc-500">Year Complete</p>
+                                <p className="text-xs text-zinc-500">Period Complete</p>
                             </div>
                         </div>
                     </CardBody>

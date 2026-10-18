@@ -191,6 +191,13 @@ const LeaveRequestSchema = new Schema<ILeaveRequest>(
             type: Schema.Types.ObjectId,
             ref: "Staff",
         },
+        balanceDebited: {
+            type: Boolean,
+            // false when an approved request was never deducted from a balance
+            // (e.g. emergency leave created with skipValidation), so cancelling
+            // it doesn't credit back days that were never taken. Unset on older
+            // requests, which were all debited on approval.
+        },
     },
     {
         timestamps: true,
@@ -210,10 +217,14 @@ LeaveRequestSchema.pre("save", async function () {
         this.startYear = this.startDate.getFullYear()
     }
 
-    // Validate start date is in current year or future
-    const currentYear = new Date().getFullYear()
-    if (this.startYear < currentYear) {
-        throw new Error("Leave start date cannot be in past years")
+    // Validate start date is in current year or future. Only on create or when
+    // the start date changes: approving/cancelling a December request in
+    // January must still be able to save.
+    if (this.isNew || this.isModified("startDate")) {
+        const currentYear = new Date().getFullYear()
+        if (this.startYear < currentYear) {
+            throw new Error("Leave start date cannot be in past years")
+        }
     }
 
     // Compute working days if dates changed
@@ -257,6 +268,53 @@ LeaveRequestSchema.pre("save", async function () {
     }
 })
 
+// Find the balance for the period containing `date`. Sorted so that, if periods
+// ever overlap, the most recent one is used consistently everywhere.
+function findBalanceForDate(
+    staffId: string,
+    leaveType: string,
+    date: Date,
+    session?: ClientSession | null
+) {
+    const LeaveBalance = mongoose.model("LeaveBalance")
+    const query = LeaveBalance.findOne({
+        staff: staffId,
+        leaveType,
+        periodStart: { $lte: date },
+        periodEnd: { $gte: date },
+    }).sort({ periodStart: -1 })
+    return session ? query.session(session) : query
+}
+
+// Atomically move a request between statuses so two concurrent actions (e.g. a
+// double-clicked Approve) can't both debit or credit the balance.
+async function claimStatus(
+    doc: any,
+    from: LeaveStatus,
+    to: LeaveStatus,
+    session?: ClientSession | null
+) {
+    const result = await doc.constructor.updateOne(
+        { _id: doc._id, status: from },
+        { $set: { status: to } },
+        session ? { session } : {}
+    )
+    if (result.modifiedCount === 0) {
+        throw new Error("This leave request has already been processed")
+    }
+}
+
+// Run a compensating step after a failure without letting its own failure
+// replace the original error (inside an aborted transaction it will fail, and
+// the abort rolls everything back anyway).
+async function undo(step: Promise<unknown>) {
+    try {
+        await step
+    } catch (error) {
+        console.error("[LeaveRequest] Failed to undo partial update:", error)
+    }
+}
+
 // Instance method to compute working days
 LeaveRequestSchema.methods.computeWorkingDays = async function (): Promise<{
     total: number
@@ -293,7 +351,6 @@ LeaveRequestSchema.methods.computeWorkingDays = async function (): Promise<{
 // Instance method to validate request
 LeaveRequestSchema.methods.validateRequest = async function (): Promise<void> {
     const Staff = mongoose.model("Staff")
-    const LeaveBalance = mongoose.model("LeaveBalance")
 
     // Get staff details
     const staff = await Staff.findById(this.staff)
@@ -322,13 +379,7 @@ LeaveRequestSchema.methods.validateRequest = async function (): Promise<void> {
     const staffId = this.staff._id ? this.staff._id.toString() : this.staff.toString()
 
     // Check balance availability (period-based lookup)
-    const leaveStartDate = new Date(this.startDate)
-    const balance = await LeaveBalance.findOne({
-        staff: staffId,
-        leaveType: this.leaveType,
-        periodStart: { $lte: leaveStartDate },
-        periodEnd: { $gte: leaveStartDate },
-    })
+    const balance = await findBalanceForDate(staffId, this.leaveType, new Date(this.startDate))
 
     if (!balance) {
         throw new Error(
@@ -364,35 +415,25 @@ LeaveRequestSchema.methods.endorse = async function (
         throw new Error("Only pending requests can be endorsed")
     }
 
-    // Check if endorser and approver positions are the same
+    // Check if endorser and approver positions are the same. The positions may
+    // be populated documents, so compare their ids.
+    const idOf = (value: any) => (value?._id ?? value)?.toString()
     const isSingleLevelApproval = this.endorsement?.byPosition &&
                                    this.approval?.byPosition &&
-                                   this.endorsement.byPosition.toString() === this.approval.byPosition.toString()
+                                   idOf(this.endorsement.byPosition) === idOf(this.approval.byPosition)
 
     if (isSingleLevelApproval) {
         // Single-level approval: directly approve the request
-        const LeaveBalance = mongoose.model("LeaveBalance")
 
         // Get staff ID (handle both populated and non-populated staff field)
         const staffId = this.staff._id ? this.staff._id.toString() : this.staff.toString()
 
         // Debit balance (period-based lookup)
-        const leaveStartDate = new Date(this.startDate)
-        const balance = await LeaveBalance.findOne({
-            staff: staffId,
-            leaveType: this.leaveType,
-            periodStart: { $lte: leaveStartDate },
-            periodEnd: { $gte: leaveStartDate },
-        })
+        const balance = await findBalanceForDate(staffId, this.leaveType, new Date(this.startDate))
 
         if (!balance) {
             throw new Error(`No ${this.leaveType} balance found for the current leave period`)
         }
-
-        await balance.debit(
-            this.workingDays,
-            `Leave request ${this._id} approved (single-level)`
-        )
 
         this.status = LeaveStatus.APPROVED
 
@@ -408,6 +449,30 @@ LeaveRequestSchema.methods.endorse = async function (
             this.approval.at = new Date()
             this.approval.comment = comment || "Auto-approved (single-level approval)"
             this.approval.decision = "approved"
+        }
+
+        // Fail on schema errors (e.g. an over-long comment) before the balance changes
+        const validationError = this.validateSync()
+        if (validationError) throw validationError
+
+        await claimStatus(this, LeaveStatus.PENDING, LeaveStatus.APPROVED)
+        try {
+            await balance.debit(
+                this.workingDays,
+                `Leave request ${this._id} approved (single-level)`
+            )
+        } catch (error) {
+            await undo(claimStatus(this, LeaveStatus.APPROVED, LeaveStatus.PENDING))
+            throw error
+        }
+
+        try {
+            return await this.save()
+        } catch (error) {
+            // Don't leave the balance debited for a request that isn't approved
+            await undo(balance.credit(this.workingDays, `Leave request ${this._id} approval failed to save`))
+            await undo(claimStatus(this, LeaveStatus.APPROVED, LeaveStatus.PENDING))
+            throw error
         }
     } else {
         // Two-level approval: standard endorsement flow
@@ -432,28 +497,16 @@ LeaveRequestSchema.methods.approve = async function (
         throw new Error("Only endorsed requests can be approved")
     }
 
-    const LeaveBalance = mongoose.model("LeaveBalance")
-
     // Get staff ID (handle both populated and non-populated staff field)
     const staffId = this.staff._id ? this.staff._id.toString() : this.staff.toString()
 
-    // Debit balance (period-based lookup)
-    const leaveStartDate = new Date(this.startDate)
-    const balance = await LeaveBalance.findOne({
-        staff: staffId,
-        leaveType: this.leaveType,
-        periodStart: { $lte: leaveStartDate },
-        periodEnd: { $gte: leaveStartDate },
-    })
+    // Debit balance (period-based lookup). Loading it in the session makes the
+    // debit's save part of the same transaction when one is in use.
+    const balance = await findBalanceForDate(staffId, this.leaveType, new Date(this.startDate), session)
 
     if (!balance) {
         throw new Error(`No ${this.leaveType} balance found for the current leave period`)
     }
-
-    await balance.debit(
-        this.workingDays,
-        `Leave request ${this._id} approved`
-    )
 
     this.status = LeaveStatus.APPROVED
     if (this.approval) {
@@ -463,7 +516,29 @@ LeaveRequestSchema.methods.approve = async function (
         this.approval.decision = "approved"
     }
 
-    return await this.save({ session })
+    // Fail on schema errors (e.g. an over-long comment) before the balance changes
+    const validationError = this.validateSync()
+    if (validationError) throw validationError
+
+    await claimStatus(this, LeaveStatus.ENDORSED, LeaveStatus.APPROVED, session)
+    try {
+        await balance.debit(
+            this.workingDays,
+            `Leave request ${this._id} approved`
+        )
+    } catch (error) {
+        await undo(claimStatus(this, LeaveStatus.APPROVED, LeaveStatus.ENDORSED, session))
+        throw error
+    }
+
+    try {
+        return await this.save({ session })
+    } catch (error) {
+        // Don't leave the balance debited for a request that isn't approved
+        await undo(balance.credit(this.workingDays, `Leave request ${this._id} approval failed to save`))
+        await undo(claimStatus(this, LeaveStatus.APPROVED, LeaveStatus.ENDORSED, session))
+        throw error
+    }
 }
 
 // Instance method to reject
@@ -510,28 +585,20 @@ LeaveRequestSchema.methods.cancel = async function (
         throw new Error("This leave request cannot be cancelled")
     }
 
-    const LeaveBalance = mongoose.model("LeaveBalance")
-
     // Get staff ID (handle both populated and non-populated staff field)
     const staffId = this.staff._id ? this.staff._id.toString() : this.staff.toString()
 
-    // Credit back the balance (period-based lookup)
-    const leaveStartDate = new Date(this.startDate)
-    const balance = await LeaveBalance.findOne({
-        staff: staffId,
-        leaveType: this.leaveType,
-        periodStart: { $lte: leaveStartDate },
-        periodEnd: { $gte: leaveStartDate },
-    })
+    // Only credit back days that were actually deducted
+    const wasDebited = this.get("balanceDebited") !== false
 
-    if (!balance) {
+    // Credit back the balance (period-based lookup)
+    const balance = wasDebited
+        ? await findBalanceForDate(staffId, this.leaveType, new Date(this.startDate), session)
+        : null
+
+    if (wasDebited && !balance) {
         throw new Error(`No ${this.leaveType} balance found for the current leave period`)
     }
-
-    await balance.credit(
-        this.workingDays,
-        `Leave request ${this._id} cancelled`
-    )
 
     this.status = LeaveStatus.CANCELLED
     this.cancellation = {
@@ -540,7 +607,33 @@ LeaveRequestSchema.methods.cancel = async function (
         reason,
     }
 
-    return await this.save({ session })
+    // Fail on schema errors (e.g. an over-long reason) before the balance changes
+    const validationError = this.validateSync()
+    if (validationError) throw validationError
+
+    await claimStatus(this, LeaveStatus.APPROVED, LeaveStatus.CANCELLED, session)
+    if (balance) {
+        try {
+            await balance.credit(
+                this.workingDays,
+                `Leave request ${this._id} cancelled`
+            )
+        } catch (error) {
+            await undo(claimStatus(this, LeaveStatus.CANCELLED, LeaveStatus.APPROVED, session))
+            throw error
+        }
+    }
+
+    try {
+        return await this.save({ session })
+    } catch (error) {
+        // Don't leave days credited back for a request that is still approved
+        if (balance) {
+            await undo(balance.debit(this.workingDays, `Leave request ${this._id} cancellation failed to save`))
+        }
+        await undo(claimStatus(this, LeaveStatus.CANCELLED, LeaveStatus.APPROVED, session))
+        throw error
+    }
 }
 
 // Static method to get overlapping requests

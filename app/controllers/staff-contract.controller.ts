@@ -20,6 +20,7 @@ import {
     LEAVE_CAPS,
 } from "../utils/types"
 import { getContractPeriod, formatPeriod, getTotalMonthsInPeriod } from "../utils/contract-period"
+import { escapeRegex } from "../utils/regex"
 
 export class StaffContractController {
     /**
@@ -466,8 +467,13 @@ export class StaffContractController {
                     },
                 })
 
-            // Sync leave balance periods when contract dates change
-            if (updates.endDate || updates.startDate) {
+            // Sync leave balance periods when contract dates change. Only for the
+            // active contract: editing an old renewed/expired one must not touch
+            // the balances that now belong to its successor.
+            if (
+                (updates.endDate || updates.startDate) &&
+                updatedContract?.status === ContractStatus.ACTIVE
+            ) {
                 try {
                     const staffId = (contract.staff as any)._id.toString()
                     const effectiveStartDate = updates.startDate || contract.startDate
@@ -480,26 +486,38 @@ export class StaffContractController {
                     )
 
                     if (newPeriod) {
+                        const newNormalizedStart = new Date(newPeriod.periodStart)
+                        newNormalizedStart.setHours(0, 0, 0, 0)
+
                         // Compute the old period to find existing balance records
                         const oldPeriod = getContractPeriod(
                             { startDate: contract.startDate, endDate: contract.endDate },
                             new Date()
                         )
 
+                        // Balances to move onto the new period: the old current period's
+                        // set or, when the old dates gave no current period (the contract
+                        // had already ended and is now being extended), a set already at
+                        // the new period's start (a final period capped at the old end date).
+                        let sourceStart = newNormalizedStart
                         if (oldPeriod) {
-                            const oldNormalizedStart = new Date(oldPeriod.periodStart)
-                            oldNormalizedStart.setHours(0, 0, 0, 0)
+                            sourceStart = new Date(oldPeriod.periodStart)
+                            sourceStart.setHours(0, 0, 0, 0)
+                        }
 
-                            // Find all balance records for the old period
-                            const balances = await LeaveBalance.find({
-                                staff: staffId,
-                                periodStart: oldNormalizedStart,
-                            })
+                        const balances = await LeaveBalance.find({
+                            staff: staffId,
+                            periodStart: sourceStart,
+                        })
 
+                        if (balances.length > 0) {
                             const newPeriodEnd = new Date(newPeriod.periodEnd)
                             const newTotalMonths = getTotalMonthsInPeriod(newPeriod.periodStart, newPeriod.periodEnd)
 
                             for (const balance of balances) {
+                                // Keep periodStart in step with the contract too, so lookups by
+                                // exact period start (balances screen, daily job) still find it
+                                balance.periodStart = newNormalizedStart
                                 balance.periodEnd = newPeriodEnd
 
                                 // Recalculate allocated days for the new period length
@@ -518,11 +536,22 @@ export class StaffContractController {
                                 }
                             }
 
-                            if (balances.length > 0) {
-                                console.log(
-                                    `Updated ${balances.length} leave balance period(s) for staff ${staffId} to ${formatPeriod(newPeriod.periodStart, newPeriod.periodEnd)}`
-                                )
-                            }
+                            console.log(
+                                `Updated ${balances.length} leave balance period(s) for staff ${staffId} to ${formatPeriod(newPeriod.periodStart, newPeriod.periodEnd)}`
+                            )
+                        } else {
+                            // No balances for the period we're now in (e.g. the contract had
+                            // already ended, so the daily anniversary job skipped it). Create
+                            // them here so the staff member isn't left with no balance until
+                            // the next midnight run. initializeForStaff is idempotent.
+                            await LeaveBalance.initializeForStaff(
+                                staffId,
+                                newPeriod.periodStart,
+                                newPeriod.periodEnd
+                            )
+                            console.log(
+                                `Created leave balances for staff ${staffId} for ${formatPeriod(newPeriod.periodStart, newPeriod.periodEnd)}`
+                            )
                         }
                     }
                 } catch (balanceError) {
@@ -604,11 +633,12 @@ export class StaffContractController {
                 )
             }
 
-            // Check if staff has another active contract
+            // Check if staff has another active contract. The contract this one
+            // renews stays active until its successor starts, so it doesn't count.
             const existingActive = await StaffContract.findOne({
                 staff: (contract.staff as any)._id,
                 status: ContractStatus.ACTIVE,
-                _id: { $ne: id },
+                _id: { $nin: [id, contract.previousContract].filter((v): v is string => !!v) },
             })
 
             if (existingActive) {
@@ -627,6 +657,17 @@ export class StaffContractController {
             if (!canAcceptMore) {
                 return errorResponseObject(
                     `Position "${position.title}" has reached maximum occupancy`
+                )
+            }
+
+            // The renewed contract hands over to this one
+            if (contract.previousContract) {
+                await StaffContract.updateOne(
+                    {
+                        _id: contract.previousContract,
+                        status: { $in: [ContractStatus.ACTIVE, ContractStatus.EXPIRED] },
+                    },
+                    { $set: { status: ContractStatus.RENEWED } }
                 )
             }
 
@@ -745,6 +786,20 @@ export class StaffContractController {
                 return errorResponseObject(error.message)
             }
 
+            // A future-dated renewal keeps this contract active until it starts;
+            // cancel it so the daily job doesn't activate it for someone who left
+            await StaffContract.updateMany(
+                { previousContract: contract._id, status: ContractStatus.PENDING },
+                {
+                    $set: {
+                        status: ContractStatus.CANCELLED,
+                        terminatedBy: user._id,
+                        terminationReason: "Previous contract terminated",
+                        terminationDate: new Date(),
+                    },
+                }
+            )
+
             // Update staff status to inactive (since one contract rule)
             await Staff.findByIdAndUpdate(
                 (contract.staff as any)._id,
@@ -862,6 +917,18 @@ export class StaffContractController {
                 )
             }
 
+            // A future-dated renewal leaves this contract active, so guard
+            // against renewing it twice
+            const pendingRenewal = await StaffContract.findOne({
+                previousContract: currentContract._id,
+                status: ContractStatus.PENDING,
+            })
+            if (pendingRenewal) {
+                return errorResponseObject(
+                    "This contract already has a pending renewal"
+                )
+            }
+
             // Validate new end date
             const renewalEndDate = new Date(newEndDate)
             if (isNaN(renewalEndDate.getTime())) {
@@ -927,10 +994,16 @@ export class StaffContractController {
 
             // Use instance method to renew (marks current as RENEWED and creates new)
             let newContract
+            const startsNow = newStartDate <= new Date()
+            const previousStatus = currentContract.status
             try {
-                // First mark current as renewed
-                currentContract.status = ContractStatus.RENEWED
-                await currentContract.save()
+                // Mark current as renewed only if the new contract takes over now.
+                // Otherwise it stays active until the new one starts; the daily
+                // cron then activates the new contract and marks this one renewed.
+                if (startsNow) {
+                    currentContract.status = ContractStatus.RENEWED
+                    await currentContract.save()
+                }
 
                 // Create new contract
                 const contractData = {
@@ -938,10 +1011,9 @@ export class StaffContractController {
                     position: newPosition,
                     startDate: newStartDate,
                     endDate: renewalEndDate,
-                    status:
-                        newStartDate <= new Date()
-                            ? ContractStatus.ACTIVE
-                            : ContractStatus.PENDING,
+                    status: startsNow
+                        ? ContractStatus.ACTIVE
+                        : ContractStatus.PENDING,
                     salary:
                         salary !== undefined ? salary : currentContract.salary,
                     currency: currentContract.currency,
@@ -960,9 +1032,12 @@ export class StaffContractController {
                     )
                 }
             } catch (error: any) {
-                // Rollback if creation fails
-                currentContract.status = ContractStatus.ACTIVE
-                await currentContract.save()
+                // Rollback if creation fails (and only if the new contract
+                // wasn't created, or the staff would have two active contracts)
+                if (!newContract && currentContract.status !== previousStatus) {
+                    currentContract.status = previousStatus
+                    await currentContract.save()
+                }
                 return errorResponseObject(
                     `Failed to renew contract: ${error.message}`
                 )
@@ -1467,7 +1542,7 @@ export class StaffContractController {
 
             // Search by staff name if provided
             if (search && typeof search === "string" && search.trim()) {
-                const searchTerm = search.trim()
+                const searchTerm = escapeRegex(search.trim())
                 const matchingStaff = await Staff.find({
                     $or: [
                         { name: { $regex: searchTerm, $options: "i" } },
@@ -1619,7 +1694,7 @@ export class StaffContractController {
 
             // Search by staff name if provided
             if (search && typeof search === "string" && search.trim()) {
-                const searchTerm = search.trim()
+                const searchTerm = escapeRegex(search.trim())
                 const matchingStaff = await Staff.find({
                     $or: [
                         { name: { $regex: searchTerm, $options: "i" } },
@@ -1772,7 +1847,7 @@ export class StaffContractController {
             // Search by staff name if provided
             let staffFilter: any[] = []
             if (search && typeof search === "string" && search.trim()) {
-                const searchTerm = search.trim()
+                const searchTerm = escapeRegex(search.trim())
                 const matchingStaff = await Staff.find({
                     $or: [
                         { name: { $regex: searchTerm, $options: "i" } },

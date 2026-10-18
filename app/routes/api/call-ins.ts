@@ -8,15 +8,13 @@ import Staff from "~/models/staff.model"
 import StaffContract from "~/models/staff-contract.model"
 import JobPosition from "~/models/job-position.model"
 import LeaveRequest from "~/models/leave-request.model"
-import jwt from "jsonwebtoken"
+import { verifyAccessToken } from "~/utils/auth-token"
 import {
     successResponse,
     errorResponse,
     validationErrorResponse,
     extractToken,
 } from "~/utils/api-utils"
-
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
 
 // Helper to get authenticated staff from request
 async function getAuthenticatedStaff(request: Request) {
@@ -28,7 +26,7 @@ async function getAuthenticatedStaff(request: Request) {
     }
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET) as { staffId: string }
+        const decoded = verifyAccessToken(token)
         await connectDB()
 
         const staff = await Staff.findById(decoded.staffId)

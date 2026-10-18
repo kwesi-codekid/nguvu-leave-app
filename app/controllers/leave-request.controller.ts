@@ -45,9 +45,9 @@ export class LeaveRequestController {
      * POST /api/leave-requests
      */
     static async createLeaveRequest(req: Request): Promise<ResponseObject> {
-        console.log("[LeaveRequest] createLeaveRequest called with:", {
-            body: req.body,
-            user: (req as any).user,
+        console.log("[LeaveRequest] createLeaveRequest called:", {
+            staff: (req as any).user?._id,
+            leaveType: req.body?.leaveType,
             hasAttachments: !!(req.body.attachments && req.body.attachments.length > 0)
         })
         
@@ -335,10 +335,10 @@ export class LeaveRequestController {
                 leaveType,
                 periodStart: { $lte: leaveStartDate },
                 periodEnd: { $gte: leaveStartDate },
-            })
+            }).sort({ periodStart: -1 })
             const balance = session ? await balanceQuery.session(session) : await balanceQuery
 
-            console.log(`[LeaveRequest] Balance found:`, balance)
+            console.log(`[LeaveRequest] Balance found:`, balance?._id)
 
             if (!balance) {
                 console.error(`[LeaveRequest] No balance found for staff: ${targetStaffId}, leaveType: ${leaveType}`)
@@ -501,7 +501,7 @@ export class LeaveRequestController {
                     console.log('[LeaveRequest] Endorser contract found:', !!endorserContract)
                     if (endorserContract) {
                         console.log('[LeaveRequest] Endorser staff:', endorserContract.staff ? (endorserContract.staff as any).name : 'No staff')
-                        console.log('[LeaveRequest] Endorser phone:', endorserContract.staff ? (endorserContract.staff as any).phone : 'No phone')
+                        console.log('[LeaveRequest] Endorser has phone:', !!(endorserContract.staff as any)?.phone)
                     }
                     
                     if (endorserContract && endorserContract.staff) {
@@ -792,7 +792,7 @@ export class LeaveRequestController {
                 }
 
                 // Recalculate working days if dates changed
-                if (startDate || endDate) {
+                if (startDate || endDate || numberOfDays) {
                     const workingDaysResult =
                         await this.calculateWorkingDaysInternal(
                             newStartDate,
@@ -812,7 +812,7 @@ export class LeaveRequestController {
                         leaveType: request.leaveType,
                         periodStart: { $lte: newStartDate },
                         periodEnd: { $gte: newStartDate },
-                    })
+                    }).sort({ periodStart: -1 })
                     const balance = session ? await balanceQuery2.session(session) : await balanceQuery2
 
                     if (!balance?.canRequest(workingDaysResult.total)) {
@@ -849,7 +849,9 @@ export class LeaveRequestController {
                         updates.startYear = newStartDate.getFullYear()
                     }
 
-                    if (endDate) {
+                    // Also when only startDate (+ numberOfDays) was sent: workingDays
+                    // below is computed from newEndDate, so the stored range must match
+                    if (newEndDate.getTime() !== new Date(request.endDate).getTime()) {
                         changes.push({
                             field: "endDate",
                             oldValue: request.endDate,
@@ -3443,18 +3445,10 @@ export class LeaveRequestController {
                 },
             }
 
-            // Create leave request
-            let leaveRequest
-            if (session) {
-                leaveRequest = await LeaveRequest.create([leaveRequestData], {
-                    session,
-                })
-            } else {
-                const newRequest = await LeaveRequest.create(leaveRequestData)
-                leaveRequest = [newRequest]
-            }
-
-            // Debit balance if not skipping validation (period-based)
+            // Find the balance to debit (unless skipping validation) before
+            // creating the request, so an insufficient balance can't leave an
+            // approved request behind with nothing deducted
+            let balance = null
             if (!skipValidation) {
                 const emergencyStartDate = new Date(startDate)
                 const balanceQuery = LeaveBalance.findOne({
@@ -3462,15 +3456,38 @@ export class LeaveRequestController {
                     leaveType,
                     periodStart: { $lte: emergencyStartDate },
                     periodEnd: { $gte: emergencyStartDate },
-                })
-                const balance = session ? await balanceQuery.session(session) : await balanceQuery
+                }).sort({ periodStart: -1 })
+                balance = session ? await balanceQuery.session(session) : await balanceQuery
 
-                if (balance) {
-                    await balance.debit(
-                        workingDaysResult.total,
-                        `Emergency leave request ${leaveRequest[0]._id}`
+                if (balance && !balance.canRequest(workingDaysResult.total)) {
+                    if (session) await session.abortTransaction()
+                    return errorResponseObject(
+                        `Insufficient ${leaveType} balance. Available: ${balance.availableForRequest} days, Requested: ${workingDaysResult.total} days`
                     )
                 }
+            }
+
+            // Record whether the days are deducted, so cancelling doesn't credit
+            // back days that were never taken
+            const leaveRequestDataWithDebit = { ...leaveRequestData, balanceDebited: !!balance }
+
+            // Create leave request
+            let leaveRequest
+            if (session) {
+                leaveRequest = await LeaveRequest.create([leaveRequestDataWithDebit], {
+                    session,
+                })
+            } else {
+                const newRequest = await LeaveRequest.create(leaveRequestDataWithDebit)
+                leaveRequest = [newRequest]
+            }
+
+            // Debit balance (period-based)
+            if (balance) {
+                await balance.debit(
+                    workingDaysResult.total,
+                    `Emergency leave request ${leaveRequest[0]._id}`
+                )
             }
 
             if (session) await session.commitTransaction()
@@ -3637,7 +3654,7 @@ export class LeaveRequestController {
         const holidays = await Holiday.getHolidaysInRange(startDate, endDate)
         return holidays.map((h) => ({
             name: h.name,
-            date: h.date,
+            date: h.startDate,
             type: h.type,
         }))
     }

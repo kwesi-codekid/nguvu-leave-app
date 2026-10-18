@@ -1,7 +1,7 @@
 import { Request } from "express"
 import mongoose from "mongoose"
 import LeaveRequest from "../models/leave-request.model"
-import LeaveBalance from "../models/leave-balance.model"
+import LeaveBalance, { calcRemaining } from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import Department from "../models/department.model"
 import StaffContract from "../models/staff-contract.model"
@@ -401,6 +401,9 @@ export class ReportController {
                     },
                 })
                 .lean()
+
+            // A calendar year can overlap two anniversary periods; keep one per staff
+            balances = this.pickOnePeriodPerStaff(balances, yearEnd)
 
             // Filter by department if specified
             if (departmentId) {
@@ -934,8 +937,14 @@ export class ReportController {
 
             const yearNum = year ? Number(year) : new Date().getFullYear()
 
-            // Build query
-            const balanceQuery: any = { year: yearNum }
+            // Build query: balances whose period overlaps the selected year
+            // (same approach as the leave balances report)
+            const yearStart = new Date(`${yearNum}-01-01T00:00:00.000Z`)
+            const yearEnd = new Date(`${yearNum}-12-31T23:59:59.999Z`)
+            const balanceQuery: any = {
+                periodStart: { $lte: yearEnd },
+                periodEnd: { $gte: yearStart },
+            }
 
             if (staffId) {
                 balanceQuery.staff = staffId
@@ -959,6 +968,9 @@ export class ReportController {
                     },
                 })
                 .lean()
+
+            // A calendar year can overlap two anniversary periods; keep one per staff
+            balances = this.pickOnePeriodPerStaff(balances, yearEnd)
 
             // Filter by department if specified
             if (departmentId) {
@@ -993,11 +1005,13 @@ export class ReportController {
             for (const balance of balances) {
                 const staff = balance.staff as any
                 const deptName = staff.department?.name || "No Department"
+                // .lean() strips the remaining virtual, so compute it here
+                const remaining = calcRemaining(balance)
 
                 // Overall stats
                 utilization.overall.totalAllocated += balance.allocated
                 utilization.overall.totalUsed += balance.used
-                utilization.overall.totalRemaining += balance.remaining
+                utilization.overall.totalRemaining += remaining
 
                 // By leave type
                 if (!utilization.byLeaveType[balance.leaveType]) {
@@ -1013,7 +1027,7 @@ export class ReportController {
                     balance.allocated
                 utilization.byLeaveType[balance.leaveType].used += balance.used
                 utilization.byLeaveType[balance.leaveType].remaining +=
-                    balance.remaining
+                    remaining
                 utilization.byLeaveType[balance.leaveType].staffCount++
 
                 // Staff utilization
@@ -1528,18 +1542,21 @@ export class ReportController {
                     }
                 }
 
+                // .lean() strips the remaining virtual, so compute it here
+                const remaining = calcRemaining(balance)
+
                 const balanceInfo = {
                     leaveType: balance.leaveType,
                     total: balance.allocated,
                     used: balance.used,
-                    remaining: balance.remaining,
+                    remaining,
                     yearEndStatus:
-                        balance.remaining > 0
+                        remaining > 0
                             ? "UNUSED_BALANCE"
                             : "FULLY_UTILIZED",
                     nextYearReset:
                         balance.leaveType === LeaveTypes.ANNUAL
-                            ? { to: 0, loss: balance.remaining }
+                            ? { to: 0, loss: remaining }
                             : {
                                   to:
                                       (balance as any).yearlyCap ||
@@ -1551,25 +1568,28 @@ export class ReportController {
                 staffBalances[staffId].balances.push(balanceInfo)
                 staffBalances[staffId].totals.allocated += balance.allocated
                 staffBalances[staffId].totals.used += balance.used
-                staffBalances[staffId].totals.remaining += balance.remaining
+                staffBalances[staffId].totals.remaining += remaining
 
                 // Reset preview
                 if (
                     balance.leaveType === LeaveTypes.ANNUAL &&
-                    balance.remaining > 0
+                    remaining > 0
                 ) {
                     resetPreview.annual.push({
                         staff: staff.name,
                         staffId: staff.staffId,
-                        remaining: balance.remaining,
-                        willLose: balance.remaining,
+                        remaining,
+                        willLose: remaining,
                     })
-                } else if (balance.remaining !== (balance as any).yearlyCap) {
+                } else if (
+                    balance.leaveType !== LeaveTypes.ANNUAL &&
+                    remaining !== ((balance as any).yearlyCap || balance.allocated)
+                ) {
                     resetPreview.others.push({
                         staff: staff.name,
                         staffId: staff.staffId,
                         leaveType: balance.leaveType,
-                        currentRemaining: balance.remaining,
+                        currentRemaining: remaining,
                         willResetTo:
                             (balance as any).yearlyCap || balance.allocated,
                     })
@@ -1799,6 +1819,32 @@ export class ReportController {
         return [headers.join(","), ...rows.map((row) => row.join(","))].join(
             "\n"
         )
+    }
+
+    /**
+     * Keep one balance per staff and leave type: the latest period that had
+     * started by the reference date (today, or year end for past years).
+     * A calendar year can overlap two contract-anniversary periods, so without
+     * this a staff member would be listed and totalled twice.
+     */
+    private static pickOnePeriodPerStaff<T extends Record<string, any>>(
+        balances: T[],
+        yearEnd: Date
+    ): T[] {
+        const ref = new Date(Math.min(Date.now(), yearEnd.getTime()))
+        const picked: Record<string, T> = {}
+        const sorted = balances
+            .filter((b) => new Date(b.periodStart) <= ref)
+            .sort(
+                (a, b) =>
+                    new Date(b.periodStart).getTime() -
+                    new Date(a.periodStart).getTime()
+            )
+        for (const b of sorted) {
+            const key = `${String(b.staff?._id ?? b.staff)}_${b.leaveType}`
+            if (!picked[key]) picked[key] = b
+        }
+        return Object.values(picked)
     }
 
     private static convertBalancesToCSV(balances: any[]): string {

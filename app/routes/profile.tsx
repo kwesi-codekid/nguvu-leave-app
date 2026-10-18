@@ -80,7 +80,7 @@ export default function Profile() {
 
     // Fetch leave request statistics
     const { data: statsData } = useSWR(
-        `${baseUrl}/leave-requests?op=my-requests`,
+        `${baseUrl}/leave-requests?op=my-requests&limit=100`,
         fetcher(sessionData.token as string)
     )
 
@@ -113,8 +113,8 @@ export default function Profile() {
     const staff = profileData?.data?.staff || user
 
     // Calculate statistics from leave requests
-    const leaveRequests = statsData?.data?.leaveRequests || []
-    const totalRequests = leaveRequests.length
+    const leaveRequests = statsData?.data?.requests || []
+    const totalRequests = statsData?.data?.summary?.total ?? leaveRequests.length
     const approvedRequests = leaveRequests.filter((r: any) => r.status === LeaveStatus.APPROVED).length
     const pendingRequests = leaveRequests.filter((r: any) =>
         r.status === LeaveStatus.PENDING || r.status === LeaveStatus.ENDORSED

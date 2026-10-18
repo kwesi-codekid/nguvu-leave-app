@@ -9,6 +9,7 @@ import {
     validationErrorResponseObject,
 } from "../utils/api-utils"
 import { AuditAction, ResponseObject } from "../utils/types"
+import { escapeRegex } from "../utils/regex"
 
 export class DepartmentController {
     /**
@@ -160,7 +161,7 @@ export class DepartmentController {
 
             // Free text search on name and description
             if (search && typeof search === "string" && search.trim()) {
-                const searchTerm = search.trim()
+                const searchTerm = escapeRegex(search.trim())
                 query.$or = [
                     { name: { $regex: searchTerm, $options: "i" } },
                     { description: { $regex: searchTerm, $options: "i" } },

@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI, GenerativeModel } from "@google/generative-ai"
 import LeaveRequest from "../models/leave-request.model"
-import LeaveBalance from "../models/leave-balance.model"
+import LeaveBalance, { calcRemaining, calcAvailableForRequest } from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import Department from "../models/department.model"
 import Holiday from "../models/holiday.model"
@@ -98,7 +98,7 @@ export class AIService {
                 staff: userId,
                 periodStart: { $lte: now },
                 periodEnd: { $gte: now },
-            }).populate("leaveType", "name").lean()
+            }).lean()
 
             // Get user's recent leave requests
             const recentLeaves = await LeaveRequest.find({
@@ -106,7 +106,6 @@ export class AIService {
             })
                 .sort({ createdAt: -1 })
                 .limit(10)
-                .populate("leaveType", "name")
                 .lean()
 
             // Get user's current active leave (if any)
@@ -117,7 +116,6 @@ export class AIService {
                 startDate: { $lte: currentDate },
                 endDate: { $gte: currentDate },
             })
-                .populate("leaveType", "name")
                 .lean()
 
             return {
@@ -130,15 +128,15 @@ export class AIService {
                     status: user.status,
                 },
                 leaveBalances: leaveBalances.map((balance: any) => ({
-                    leaveType: (balance.leaveType as any)?.name || "Unknown",
+                    leaveType: balance.leaveType || "Unknown",
                     allocated: balance.allocated,
                     used: balance.used,
-                    remaining: balance.allocated - balance.used,
+                    remaining: calcRemaining(balance),
                     periodStart: balance.periodStart,
                     periodEnd: balance.periodEnd,
                 })),
                 recentLeaves: recentLeaves.map((leave: any) => ({
-                    leaveType: (leave.leaveType as any)?.name || "Unknown",
+                    leaveType: leave.leaveType || "Unknown",
                     startDate: leave.startDate,
                     endDate: leave.endDate,
                     workingDays: leave.workingDays,
@@ -146,7 +144,7 @@ export class AIService {
                     createdAt: leave.createdAt,
                 })),
                 currentLeave: currentLeave ? {
-                    leaveType: (currentLeave.leaveType as any)?.name || "Unknown",
+                    leaveType: currentLeave.leaveType || "Unknown",
                     startDate: currentLeave.startDate,
                     endDate: currentLeave.endDate,
                     workingDays: currentLeave.workingDays,
@@ -263,6 +261,7 @@ export class AIService {
                 .lean()
 
             // Get staff's past leave patterns
+            const currentYear = new Date().getFullYear()
             const pastLeaves = await LeaveRequest.find({
                 staff: staffId,
                 status: LeaveStatus.APPROVED,
@@ -282,7 +281,7 @@ export class AIService {
                 currentLeave: currentUserDetails?.currentLeave,
                 leaveType,
                 availableBalance: balance
-                    ? balance.allocated - balance.used
+                    ? calcAvailableForRequest(balance)
                     : 0,
                 requestedDays: numberOfDays || 5,
                 preferredMonth: preferredMonth
@@ -1139,7 +1138,7 @@ Keep it concise (2-4 sentences).`
                     staff: userId,
                     periodStart: { $lte: new Date() },
                     periodEnd: { $gte: new Date() },
-                }).populate("leaveType", "name").lean() : []
+                }).populate("staff", "name staffId").lean() : []
                 
             } else if (userPermissions && this.getUserAccessLevel(userPermissions) === 'manager') {
                 // Managers can see department-level data plus broader system info
@@ -1193,7 +1192,7 @@ Keep it concise (2-4 sentences).`
                     ...deptFilter,
                     periodStart: { $lte: new Date() },
                     periodEnd: { $gte: new Date() },
-                }).populate("leaveType staff", "name").lean() : []
+                }).populate("staff", "name staffId").lean() : []
                 
             } else {
                 // HR/Admin can see all system data for comprehensive navigation
@@ -1238,7 +1237,7 @@ Keep it concise (2-4 sentences).`
                 allLeaveBalances = await LeaveBalance.find({
                     periodStart: { $lte: new Date() },
                     periodEnd: { $gte: new Date() },
-                }).populate("leaveType staff", "name").lean()
+                }).populate("staff", "name staffId").lean()
             }
 
             // Format department list
@@ -1292,12 +1291,12 @@ const allDepartmentsList = allDepartments.map((d: any) => ({
 
 // Format all leave balances with more context
 const allLeaveBalancesList = allLeaveBalances.map((lb) => ({
-    leaveType: (lb.leaveType as any)?.name || "Unknown",
+    leaveType: lb.leaveType || "Unknown",
     staffName: (lb.staff as any)?.name || "Unknown",
     staffId: (lb.staff as any)?.staffId || "Unknown",
     allocated: lb.allocated,
     used: lb.used,
-    remaining: lb.allocated - lb.used,
+    remaining: calcRemaining(lb),
     periodStart: lb.periodStart,
     periodEnd: lb.periodEnd,
 }))

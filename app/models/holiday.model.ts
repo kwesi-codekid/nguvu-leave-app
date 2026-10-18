@@ -293,6 +293,6 @@ HolidaySchema.set("toJSON", {
 })
 
 // Create and export the model
-const Holiday = (mongoose.models.Holiday as mongoose.Model<IHoliday, IHolidayModel>) || mongoose.model<IHoliday, IHolidayModel>("Holiday", HolidaySchema)
+const Holiday = (mongoose.models.Holiday as unknown as IHolidayModel) || mongoose.model<IHoliday, IHolidayModel>("Holiday", HolidaySchema)
 
 export default Holiday

@@ -1,5 +1,6 @@
 import mongoose, { Schema, Model, Document } from "mongoose"
 import { CallInInterface, LeaveStatus, LeaveTypes, AuditAction } from "../utils/types"
+import { appendNote } from "./leave-balance.model"
 
 // Extended interface for document methods
 interface CallInDocument extends Omit<CallInInterface, "_id">, Document {
@@ -67,6 +68,11 @@ const callInSchema = new Schema<any>(
             type: Date,
             required: true,
             default: Date.now,
+        },
+        balanceCreditedAt: {
+            type: Date,
+            // Set once processCallIn() has credited the balance, so batch
+            // reprocessing never credits the same call-in twice
         },
     },
     {
@@ -236,18 +242,19 @@ callInSchema.methods.processCallIn = async function (): Promise<void> {
             throw new Error("Leave request not found")
         }
 
-        // Find the leave balance for the staff (period-based)
-        const now = new Date()
+        // Find the balance the leave was debited from: the period containing
+        // the leave's start date (not today's, which differs after an anniversary)
+        const leaveStartDate = new Date(leaveRequest.startDate)
         const leaveBalance = await LeaveBalance.findOne({
             staff: doc.staff,
             leaveType: leaveRequest.leaveType,
-            periodStart: { $lte: now },
-            periodEnd: { $gte: now },
-        })
+            periodStart: { $lte: leaveStartDate },
+            periodEnd: { $gte: leaveStartDate },
+        }).sort({ periodStart: -1 })
 
         if (!leaveBalance) {
             throw new Error(
-                `Leave balance not found for staff ${doc.staff} for current period`
+                `Leave balance not found for staff ${doc.staff} for the leave's period`
             )
         }
 
@@ -258,12 +265,16 @@ callInSchema.methods.processCallIn = async function (): Promise<void> {
         leaveBalance.used = Math.max(0, leaveBalance.used - daysToCredit)
 
         // Add note about the call-in
-        const note = `Call-in processed: ${daysToCredit} days credited back from leave ${doc.leaveRequest}`
-        leaveBalance.notes = leaveBalance.notes
-            ? `${leaveBalance.notes}\n${note}`
-            : note
+        const note = `Call-in ${doc._id} processed: ${daysToCredit} days credited back from leave ${doc.leaveRequest}`
+        leaveBalance.notes = appendNote(leaveBalance.notes, note)
 
         await leaveBalance.save()
+
+        doc.balanceCreditedAt = new Date()
+        await (doc.constructor as any).updateOne(
+            { _id: doc._id },
+            { $set: { balanceCreditedAt: doc.balanceCreditedAt } }
+        )
 
         // Create audit log entry
         await AuditLog.create({

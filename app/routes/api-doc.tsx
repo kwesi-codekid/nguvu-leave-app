@@ -11,7 +11,7 @@ const API_ENDPOINTS = {
                 email: "string",
                 password: "string",
                 phone: "string",
-                otp: "string (4 digits)",
+                otp: "string (6 digits)",
             },
             permissions: "None",
         },
@@ -26,7 +26,7 @@ const API_ENDPOINTS = {
             method: "POST",
             path: "/api/auth?op=verify-otp",
             description: "Verify OTP and complete login",
-            body: { phone: "string", otp: "string (4 digits)" },
+            body: { phone: "string", otp: "string (6 digits)" },
             permissions: "None",
         },
         {
@@ -49,7 +49,7 @@ const API_ENDPOINTS = {
             description: "Reset password with code",
             body: {
                 phone: "string",
-                code: "string (4 digits)",
+                code: "string (6 digits)",
                 newPassword: "string",
             },
             permissions: "None",

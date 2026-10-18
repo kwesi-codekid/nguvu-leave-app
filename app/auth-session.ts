@@ -1,4 +1,5 @@
 import { createCookieSessionStorage } from "react-router"
+import { getSessionSecrets } from "~/utils/session-secrets"
 
 interface AuthSessionInterface {
     token: string
@@ -17,16 +18,8 @@ interface AuthSessionInterface {
     }
 }
 
-const session_secret =
-    process.env.NODE_ENV === "production"
-        ? process.env.SESSION_SECRET
-        : "your-secret-key"
-
-if (!session_secret) {
-    throw new Error(
-        "Auth session secret is not set! Please contact IT for support..."
-    )
-}
+// Throws in production if SESSION_SECRET is not set
+const session_secrets = getSessionSecrets()
 
 const { getSession, commitSession, destroySession } =
     createCookieSessionStorage<AuthSessionInterface>({
@@ -36,7 +29,7 @@ const { getSession, commitSession, destroySession } =
             path: "/",
             sameSite: "lax",
             secure: process.env.NODE_ENV === "production",
-            secrets: [session_secret],
+            secrets: session_secrets,
         },
     })
 

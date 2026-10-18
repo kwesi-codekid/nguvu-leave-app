@@ -118,22 +118,22 @@ export function getMonthsInPeriod(periodStart: Date, asOfDate?: Date): number {
  */
 export function getTotalMonthsInPeriod(periodStart: Date, periodEnd: Date): number {
     const start = new Date(periodStart)
-    const end = new Date(periodEnd)
 
-    const yearDiff = end.getFullYear() - start.getFullYear()
-    const monthDiff = end.getMonth() - start.getMonth()
-    const totalMonths = yearDiff * 12 + monthDiff
+    // Periods end the day before the next anniversary (or on the contract end
+    // date), so measure up to the day after periodEnd.
+    const endExclusive = new Date(periodEnd)
+    endExclusive.setDate(endExclusive.getDate() + 1)
 
-    // Add 1 to include both start and end months, but cap fractional logic
-    // A full anniversary period = 12 months (from day X to day X-1 next year)
-    // We check if the period end is roughly a full year
-    const dayDiff = end.getDate() - start.getDate()
-    if (totalMonths === 11 && dayDiff >= -1) {
-        // Full 12-month period (e.g., Mar 15 - Mar 14 = 11 months + ~30 days = 12 months)
-        return 12
-    }
+    // Whole months from start to endExclusive (e.g. Mar 15 -> Mar 15 next year = 12)
+    let months =
+        (endExclusive.getFullYear() - start.getFullYear()) * 12 +
+        (endExclusive.getMonth() - start.getMonth())
+    if (endExclusive.getDate() < start.getDate()) months--
 
-    return Math.max(1, totalMonths + 1)
+    // A trailing partial month counts as a month (e.g. Mar 15 - Sep 30 = 7)
+    if (endExclusive.getDate() !== start.getDate()) months++
+
+    return Math.min(12, Math.max(1, months))
 }
 
 /**

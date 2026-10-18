@@ -1,5 +1,5 @@
 import mongoose, { Schema, Document, Model } from "mongoose"
-import { StaffContractInterface, ContractStatus } from "../utils/types"
+import { StaffContractInterface, ContractStatus, AccountStatus } from "../utils/types"
 
 // Extend the interface for Mongoose document
 export interface IStaffContract extends StaffContractInterface, Document {
@@ -19,6 +19,7 @@ interface IStaffContractModel extends Model<IStaffContract> {
     getContractHistory(staffId: string): Promise<IStaffContract[]>
     getCurrentContract(staffId: string): Promise<IStaffContract | null>
     getExpiringContracts(days: number): Promise<IStaffContract[]>
+    activatePendingContracts(): Promise<number>
     updateExpiredContracts(): Promise<number>
     checkPositionAvailability(positionId: string): Promise<boolean>
 }
@@ -317,10 +318,82 @@ StaffContractSchema.statics.getExpiringContracts = async function (
         .exec()
 }
 
-// Static method to update expired contracts (can be called by cron job)
-StaffContractSchema.statics.updateExpiredContracts = async function (): Promise<number> {
+// Static method to activate pending contracts whose start date has arrived
+// (called by the daily cron job). A renewal leaves the previous contract active
+// until its successor starts; it is marked renewed here.
+StaffContractSchema.statics.activatePendingContracts = async function (): Promise<number> {
     const today = new Date()
     today.setHours(23, 59, 59, 999)
+
+    const due = await this.find({
+        status: ContractStatus.PENDING,
+        startDate: { $lte: today },
+    })
+
+    const Staff = mongoose.model("Staff")
+
+    let activated = 0
+    for (const contract of due) {
+        try {
+            // Don't revive a renewal for someone who has since left
+            const staff = await Staff.findById(contract.staff).select("status")
+            if (!staff || staff.status !== AccountStatus.ACTIVE) {
+                console.error(
+                    `[StaffContract] Not activating contract ${contract._id}: staff ${contract.staff} is not active`
+                )
+                continue
+            }
+
+            const previous = contract.previousContract
+                ? await this.findById(contract.previousContract).select("status")
+                : null
+            if (previous?.status === ContractStatus.CANCELLED) {
+                console.error(
+                    `[StaffContract] Not activating contract ${contract._id}: previous contract ${previous._id} was terminated`
+                )
+                continue
+            }
+
+            const otherActive = await this.findOne({
+                staff: contract.staff,
+                status: ContractStatus.ACTIVE,
+                _id: { $nin: [contract._id, contract.previousContract].filter(Boolean) },
+            })
+            if (otherActive) {
+                console.error(
+                    `[StaffContract] Not activating contract ${contract._id}: staff already has active contract ${otherActive._id}`
+                )
+                continue
+            }
+
+            if (previous) {
+                await this.updateOne(
+                    {
+                        _id: previous._id,
+                        status: { $in: [ContractStatus.ACTIVE, ContractStatus.EXPIRED] },
+                    },
+                    { $set: { status: ContractStatus.RENEWED } }
+                )
+            }
+
+            await this.updateOne(
+                { _id: contract._id, status: ContractStatus.PENDING },
+                { $set: { status: ContractStatus.ACTIVE } }
+            )
+            activated++
+        } catch (error) {
+            console.error(`[StaffContract] Failed to activate contract ${contract._id}:`, error)
+        }
+    }
+
+    return activated
+}
+
+// Static method to update expired contracts (can be called by cron job).
+// A contract is still active on its end date; it expires the day after.
+StaffContractSchema.statics.updateExpiredContracts = async function (): Promise<number> {
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
 
     const result = await this.updateMany(
         {
@@ -397,7 +470,7 @@ StaffContractSchema.set("toJSON", {
 })
 
 // Create and export the model
-const StaffContract = (mongoose.models.StaffContract as mongoose.Model<IStaffContract, IStaffContractModel>) || mongoose.model<IStaffContract, IStaffContractModel>(
+const StaffContract = (mongoose.models.StaffContract as unknown as IStaffContractModel) || mongoose.model<IStaffContract, IStaffContractModel>(
     "StaffContract",
     StaffContractSchema
 )

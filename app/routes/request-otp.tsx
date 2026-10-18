@@ -6,6 +6,7 @@ import { commitFlashSession, getFlashSession } from "~/flash-session"
 import { AuthOrDivider } from "~/ui/components/auth-or-divider"
 import { TextInput } from "~/ui/components/inputs"
 import AuthLayout from "~/ui/layouts/auth-layout"
+import { internalRequestHeaders } from "~/utils/rate-limit"
 
 export default function RequestOTP() {
     const navigation = useNavigation()
@@ -53,9 +54,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const phone = formData.get("phone")
 
     try {
-        const response = await axios.post(`${baseUrl}/auth?op=send-otp`, {
-            phone,
-        })
+        const response = await axios.post(
+            `${baseUrl}/auth?op=send-otp`,
+            { phone },
+            { headers: internalRequestHeaders(request) }
+        )
 
         flashSession.flash("alert", {
             status: "success",
@@ -65,7 +68,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             title: "OTP sent successfully",
         })
 
-        return redirect(`/verify-otp?phone=${phone}`, {
+        return redirect(`/verify-otp?phone=${encodeURIComponent(String(phone))}`, {
             headers: {
                 "Set-Cookie": await commitFlashSession(flashSession),
             },

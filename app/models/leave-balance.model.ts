@@ -114,23 +114,60 @@ LeaveBalanceSchema.pre("save", function () {
     }
 })
 
+const NOTES_MAX_LENGTH = 2000
+
+/**
+ * Append a line to a balance's notes, dropping the oldest text so the result
+ * stays within the schema's maxlength (otherwise save() fails once a busy
+ * balance's history fills up).
+ */
+export function appendNote(existing: string | undefined | null, note: string): string {
+    if (!existing) return note.slice(-NOTES_MAX_LENGTH)
+    const combined = `${existing}\n${note}`
+    return combined.length <= NOTES_MAX_LENGTH ? combined : combined.slice(-NOTES_MAX_LENGTH)
+}
+
+type BalanceFields = {
+    leaveType: string
+    allocated?: number
+    accrued?: number
+    adjustments?: number
+    used?: number
+}
+
+/**
+ * Remaining balance. Annual leave: accrued + adjustments - used (can be negative
+ * if borrowed). Other types: allocated + adjustments - used (full allocation
+ * available immediately).
+ *
+ * Exported so .lean() results and aggregates, which don't get virtuals, use the
+ * same formula as the `remaining` virtual.
+ */
+export function calcRemaining(b: BalanceFields): number {
+    const base = b.leaveType === LeaveTypes.ANNUAL ? (Number(b.accrued) || 0) : (Number(b.allocated) || 0)
+    return base + (Number(b.adjustments) || 0) - (Number(b.used) || 0)
+}
+
+/**
+ * Max requestable for all types. Can request up to allocated days total, even
+ * if not yet fully accrued. Adjustments (e.g. carried-over leave from a previous
+ * year) are added on top of the allocation so they are genuinely requestable,
+ * not just shown. Legacy records may hold accrued values above the allocation
+ * cap; those days were granted, so they must stay requestable too.
+ */
+export function calcAvailableForRequest(b: BalanceFields): number {
+    const base = Math.max(Number(b.allocated) || 0, Number(b.accrued) || 0)
+    return Math.max(0, base + (Number(b.adjustments) || 0) - (Number(b.used) || 0))
+}
+
 // Virtual for remaining balance
 LeaveBalanceSchema.virtual("remaining").get(function () {
-    // Annual leave: remaining = accrued + adjustments - used (can be negative if borrowed)
-    // Other types: remaining = allocated + adjustments - used (full allocation available immediately)
-    const base = this.leaveType === LeaveTypes.ANNUAL ? (this.accrued || 0) : this.allocated
-    return base + (this.adjustments || 0) - this.used
+    return calcRemaining(this as unknown as BalanceFields)
 })
 
 // Virtual for available for request (max requestable for all types)
 LeaveBalanceSchema.virtual("availableForRequest").get(function () {
-    // Can request up to allocated days total, even if not yet fully accrued.
-    // Adjustments (e.g. carried-over leave from a previous year) are added on
-    // top of the allocation so they are genuinely requestable, not just shown.
-    // Legacy records may hold accrued values above the allocation cap; those
-    // days were granted, so they must stay requestable too.
-    const base = Math.max(Number(this.allocated) || 0, Number(this.accrued) || 0)
-    return Math.max(0, base + (Number(this.adjustments) || 0) - (Number(this.used) || 0))
+    return calcAvailableForRequest(this as unknown as BalanceFields)
 })
 
 // Virtual for formatted period label
@@ -163,21 +200,7 @@ LeaveBalanceSchema.methods.debit = async function (
     }
 
     this.used += days
-
-    const newNote = `${new Date().toISOString()}: Debited ${days} days - ${reason}`
-
-    if (this.notes) {
-        const combinedNotes = `${this.notes}\n${newNote}`
-        if (combinedNotes.length <= 2000) {
-            this.notes = combinedNotes
-        } else {
-            const maxOldLength = 2000 - newNote.length - 1
-            const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
-            this.notes = `${truncatedOld}\n${newNote}`
-        }
-    } else {
-        this.notes = newNote
-    }
+    this.notes = appendNote(this.notes, `${new Date().toISOString()}: Debited ${days} days - ${reason}`)
 
     return await this.save()
 }
@@ -188,21 +211,7 @@ LeaveBalanceSchema.methods.credit = async function (
     reason?: string
 ): Promise<ILeaveBalance> {
     this.used = Math.max(0, this.used - days)
-
-    const newNote = `${new Date().toISOString()}: Credited ${days} days - ${reason}`
-
-    if (this.notes) {
-        const combinedNotes = `${this.notes}\n${newNote}`
-        if (combinedNotes.length <= 2000) {
-            this.notes = combinedNotes
-        } else {
-            const maxOldLength = 2000 - newNote.length - 1
-            const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
-            this.notes = `${truncatedOld}\n${newNote}`
-        }
-    } else {
-        this.notes = newNote
-    }
+    this.notes = appendNote(this.notes, `${new Date().toISOString()}: Credited ${days} days - ${reason}`)
 
     return await this.save()
 }
@@ -272,21 +281,10 @@ LeaveBalanceSchema.methods.updateAccrual = async function (
     if (newAccrual > (this.accrued || 0)) {
         this.accrued = newAccrual
         this.lastAccrualAt = effectiveDate
-
-        const newNote = `${effectiveDate.toISOString()}: Accrued to ${newAccrual} days (${monthsWorked} months in period)`
-
-        if (this.notes) {
-            const combinedNotes = `${this.notes}\n${newNote}`
-            if (combinedNotes.length <= 2000) {
-                this.notes = combinedNotes
-            } else {
-                const maxOldLength = 2000 - newNote.length - 1
-                const truncatedOld = this.notes.substring(this.notes.length - maxOldLength)
-                this.notes = `${truncatedOld}\n${newNote}`
-            }
-        } else {
-            this.notes = newNote
-        }
+        this.notes = appendNote(
+            this.notes,
+            `${effectiveDate.toISOString()}: Accrued to ${newAccrual} days (${monthsWorked} months in period)`
+        )
 
         return await this.save()
     }
@@ -436,31 +434,39 @@ LeaveBalanceSchema.statics.createNewPeriodBalances = async function (): Promise<
 
     let count = 0
     for (const contract of activeContracts) {
-        // Get the current period for this contract
-        const period = getContractPeriod(
-            { startDate: contract.startDate, endDate: contract.endDate },
-            now
-        )
+        // One bad contract (e.g. its staff record was deleted) must not stop
+        // every contract after it from getting its new period
+        try {
+            // Get the current period for this contract
+            const period = getContractPeriod(
+                { startDate: contract.startDate, endDate: contract.endDate },
+                now
+            )
 
-        if (!period) continue // Contract not active for current date
+            if (!period) continue // Contract not active for current date
 
-        // Check if balances already exist for this period
-        const normalizedStart = new Date(period.periodStart)
-        normalizedStart.setHours(0, 0, 0, 0)
+            // Check if balances already exist for this period
+            const normalizedStart = new Date(period.periodStart)
+            normalizedStart.setHours(0, 0, 0, 0)
 
-        const existing = await this.findOne({
-            staff: contract.staff,
-            periodStart: normalizedStart,
-        })
+            const existing = await this.findOne({
+                staff: contract.staff,
+                periodStart: normalizedStart,
+            })
 
-        if (!existing) {
-            // Create balances for this new period
+            // Always run: getOrCreate is idempotent, so this also fills in any
+            // leave type missing from a partially created set
             await this.initializeForStaff(
                 contract.staff.toString(),
                 period.periodStart,
                 period.periodEnd
             )
-            count++
+            if (!existing) count++
+        } catch (error) {
+            console.error(
+                `[LeaveBalance] Failed to create period balances for contract ${contract._id}:`,
+                error
+            )
         }
     }
 

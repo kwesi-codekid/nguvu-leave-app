@@ -15,6 +15,13 @@ export interface IStaff extends StaffInterface, StaffAuthFields, Document {
     hasEmail: boolean
     displayName: string
 
+    // Brute-force / abuse protection (see utils/auth-codes.ts)
+    otpAttempts?: number
+    resetCodeAttempts?: number
+    passwordAttempts?: number
+    passwordLockedUntil?: Date | null
+    codeSendLog?: Date[]
+
     setPassword(password: string): Promise<void>
     verifyPassword(password: string): Promise<boolean>
 
@@ -88,6 +95,13 @@ const StaffSchema = new Schema<IStaff>(
         resetCodeHash: { type: String, select: false, default: null },
         resetCodeExpiresAt: { type: Date, select: false, default: null },
         passwordLastChangedAt: { type: Date, select: false, default: null },
+
+        // Brute-force / abuse protection
+        otpAttempts: { type: Number, select: false, default: 0 },
+        resetCodeAttempts: { type: Number, select: false, default: 0 },
+        passwordAttempts: { type: Number, select: false, default: 0 },
+        passwordLockedUntil: { type: Date, select: false, default: null },
+        codeSendLog: { type: [Date], select: false, default: undefined },
     },
     { timestamps: true, collection: "staff" }
 )
@@ -126,11 +140,13 @@ StaffSchema.methods.setOTP = async function (code: string, ttlMinutes: number) {
     const expires = new Date()
     expires.setMinutes(expires.getMinutes() + ttlMinutes)
     this.otpExpiresAt = expires
+    this.otpAttempts = 0
 }
 
 StaffSchema.methods.clearOTP = async function () {
     this.otpCodeHash = null
     this.otpExpiresAt = null
+    this.otpAttempts = 0
 }
 
 StaffSchema.methods.setResetCode = async function (code: string, ttlMinutes: number) {
@@ -139,11 +155,13 @@ StaffSchema.methods.setResetCode = async function (code: string, ttlMinutes: num
     const expires = new Date()
     expires.setMinutes(expires.getMinutes() + ttlMinutes)
     this.resetCodeExpiresAt = expires
+    this.resetCodeAttempts = 0
 }
 
 StaffSchema.methods.clearResetCode = async function () {
     this.resetCodeHash = null
     this.resetCodeExpiresAt = null
+    this.resetCodeAttempts = 0
 }
 
 StaffSchema.methods.setOnLeave = async function (onLeave: boolean) {
@@ -171,6 +189,12 @@ StaffSchema.set("toJSON", {
         delete ret.resetCodeHash
         delete ret.resetCodeExpiresAt
         delete ret.passwordLastChangedAt
+        const guarded = ret as any
+        delete guarded.otpAttempts
+        delete guarded.resetCodeAttempts
+        delete guarded.passwordAttempts
+        delete guarded.passwordLockedUntil
+        delete guarded.codeSendLog
         return ret
     },
 })

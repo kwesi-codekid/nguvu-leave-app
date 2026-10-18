@@ -683,7 +683,7 @@ export default function StaffContracts() {
                                         : "Indefinite"}
                                 </TableCell>
                                 <TableCell>
-                                    {contract?.remainingDays !== null
+                                    {contract?.remainingDays != null
                                         ? `${contract?.remainingDays} days`
                                         : "N/A"}
                                 </TableCell>
@@ -819,7 +819,7 @@ export default function StaffContracts() {
                                                 {contract?.staff?.name}
                                             </p>
                                             <p className='text-xs text-zinc-500'>
-                                                {contract?.remainingDays !==
+                                                {contract?.remainingDays !=
                                                 null
                                                     ? `${contract?.remainingDays} days left`
                                                     : "Indefinite"}
@@ -1126,7 +1126,7 @@ export default function StaffContracts() {
                                             >
                                                 {selectedContract.status}
                                             </Chip>
-                                            {selectedContract.remainingDays !==
+                                            {selectedContract.remainingDays !=
                                                 null && (
                                                 <Chip
                                                     size='sm'

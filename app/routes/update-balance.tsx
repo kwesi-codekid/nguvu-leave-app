@@ -20,7 +20,13 @@ import connectDB from "~/database/connect"
 import Staff from "~/models/staff.model"
 import StaffContract from "~/models/staff-contract.model"
 import LeaveBalance from "~/models/leave-balance.model"
-import { LeaveTypes, Gender, LEAVE_CAPS, AuditAction } from "~/utils/types"
+import {
+    LeaveTypes,
+    Gender,
+    LEAVE_CAPS,
+    AuditAction,
+    AccountStatus,
+} from "~/utils/types"
 import {
     getContractPeriod,
     getMonthsInPeriod,
@@ -44,22 +50,38 @@ interface StaffRow {
     remaining?: number
 }
 
+// Authorize from the current staff record, not the permissions copied into
+// the session cookie at login, so revoked HR/Admin rights or a deactivated
+// account take effect immediately.
+async function getAuthorizedHrAdmin(request: Request) {
+    const sessionData = await getSessionData(request)
+    const userId = sessionData?.user?._id
+    if (!userId) return null
+
+    await connectDB()
+    const staff = await Staff.findById(userId)
+        .select("name email permissions status")
+        .lean()
+
+    if (!staff || staff.status !== AccountStatus.ACTIVE) return null
+
+    const isHROrAdmin =
+        staff.permissions?.includes("HR") ||
+        staff.permissions?.includes("ADMIN")
+
+    return isHROrAdmin ? staff : null
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
     const authenticated = await isAuthenticated(request)
     if (!authenticated) {
         return redirect("/login-email?redirectTo=/update-balance")
     }
 
-    const sessionData = await getSessionData(request)
-    const isHROrAdmin =
-        sessionData?.user?.permissions?.includes("HR") ||
-        sessionData?.user?.permissions?.includes("ADMIN")
-
-    if (!isHROrAdmin) {
+    const currentUser = await getAuthorizedHrAdmin(request)
+    if (!currentUser) {
         return redirect("/dashboard")
     }
-
-    await connectDB()
 
     // Batch fetch: all staff, all active contracts, then relevant balances
     const allStaff = await Staff.find()
@@ -189,16 +211,10 @@ export async function action({ request }: ActionFunctionArgs) {
         return { status: "error", message: "Unauthorized" }
     }
 
-    const sessionData = await getSessionData(request)
-    const isHROrAdmin =
-        sessionData?.user?.permissions?.includes("HR") ||
-        sessionData?.user?.permissions?.includes("ADMIN")
-
-    if (!isHROrAdmin) {
+    const currentUser = await getAuthorizedHrAdmin(request)
+    if (!currentUser) {
         return { status: "error", message: "Insufficient permissions" }
     }
-
-    await connectDB()
 
     const body = await request.json()
     const updates: Array<{ staffObjectId: string; accrued: number }> =
@@ -218,7 +234,20 @@ export async function action({ request }: ActionFunctionArgs) {
         try {
             const { staffObjectId, accrued } = update
 
-            if (isNaN(accrued) || accrued < 0) {
+            // Reject non-string IDs (e.g. {"$ne": null} query operators)
+            if (
+                typeof staffObjectId !== "string" ||
+                !/^[a-f0-9]{24}$/i.test(staffObjectId)
+            ) {
+                results.push({
+                    staffId: String(staffObjectId),
+                    status: "error",
+                    message: "Invalid staff ID",
+                })
+                continue
+            }
+
+            if (typeof accrued !== "number" || isNaN(accrued) || accrued < 0) {
                 results.push({
                     staffId: staffObjectId,
                     status: "error",
@@ -346,9 +375,9 @@ export async function action({ request }: ActionFunctionArgs) {
                     action: AuditAction.BALANCE_ADJUSTED,
                     entityType: "LeaveBalance",
                     entityId: annualBalance._id,
-                    performedBy: sessionData.user!._id,
-                    performedByName: sessionData.user!.name,
-                    performedByEmail: sessionData.user!.email,
+                    performedBy: currentUser._id,
+                    performedByName: currentUser.name,
+                    performedByEmail: currentUser.email,
                     description: `Set annual leave balance for ${staff.name} (${staff.staffId}) to ${accrued} days via Update Balance page (formula ${formulaAccrued} + carry-over/adjustment ${annualBalance.adjustments}; accrual continues)`,
                     changes: [{
                         field: "balance",

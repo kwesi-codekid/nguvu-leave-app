@@ -10,6 +10,8 @@ import {
 import { commitFlashSession, getFlashSession } from "~/flash-session"
 import { AuthOrDivider } from "~/ui/components/auth-or-divider"
 import AuthLayout from "~/ui/layouts/auth-layout"
+import { internalRequestHeaders } from "~/utils/rate-limit"
+import { safeRedirectPath } from "~/utils/safe-redirect"
 
 export default function RequestOTP() {
     const navigation = useNavigation()
@@ -27,7 +29,7 @@ export default function RequestOTP() {
                 id='verify-otp-form'
                 className='flex flex-col gap-5 items-center'
             >
-                <InputOtp length={4} variant='bordered' name='otp' />
+                <InputOtp length={6} variant='bordered' name='otp' />
                 <Button
                     type='submit'
                     color='warning'
@@ -64,13 +66,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const otp = formData.get("otp")
 
     try {
-        const response = await axios.post(`${baseUrl}/auth?op=verify-otp`, {
-            otp,
-            ...(phone && { phone }),
-            ...(email && { email }),
-        })
-
-        console.log(response.data)
+        const response = await axios.post(
+            `${baseUrl}/auth?op=verify-otp`,
+            {
+                otp,
+                ...(phone && { phone }),
+                ...(email && { email }),
+            },
+            { headers: internalRequestHeaders(request) }
+        )
 
         const sessionData = {
             user: {
@@ -91,8 +95,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const session = await setSessionData(request, sessionData)
 
         // Redirect to intended page if specified, otherwise dashboard
-        const redirectTo = url.searchParams.get("redirectTo")
-        const destination = redirectTo && redirectTo.startsWith("/") ? redirectTo : "/dashboard"
+        // Only same-site paths (blocks "//evil.com" style open redirects)
+        const destination = safeRedirectPath(
+            url.searchParams.get("redirectTo"),
+            "/dashboard"
+        )
 
         return redirect(destination, {
             headers: {

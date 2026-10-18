@@ -1,7 +1,7 @@
 import { Request } from "express"
 import mongoose from "mongoose"
 import LeaveRequest from "../models/leave-request.model"
-import LeaveBalance from "../models/leave-balance.model"
+import LeaveBalance, { calcRemaining, calcAvailableForRequest } from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import Department from "../models/department.model"
 import StaffContract from "../models/staff-contract.model"
@@ -21,6 +21,7 @@ import {
     LeaveStatus,
     ContractStatus,
 } from "../utils/types"
+import { getMonthsInPeriod, getTotalMonthsInPeriod, formatPeriod } from "../utils/contract-period"
 
 export class DashboardController {
     /**
@@ -121,16 +122,22 @@ export class DashboardController {
                 })
             }
 
-            // Low balance alerts (annual leave < 3 days) - period-based
-            const lowBalanceAlerts = await LeaveBalance.find({
+            // Low balance alerts (annual leave <= 3 days requestable) - period-based.
+            // Uses days available to request: accrued-only remaining is ~2.5 in the
+            // first month of every period, which would flag nearly everyone.
+            // `remaining` is a virtual, so it can't be used in the Mongo filter.
+            const currentAnnualBalances = await LeaveBalance.find({
                 leaveType: LeaveTypes.ANNUAL,
                 periodStart: { $lte: today },
                 periodEnd: { $gte: today },
-                remaining: { $lte: 3 },
             })
                 .populate("staff", "name staffId department")
-                .limit(10)
                 .lean()
+            const lowBalances = currentAnnualBalances
+                .filter((b) => b.staff)
+                .map((b) => ({ balance: b, remaining: calcAvailableForRequest(b) }))
+                .filter((b) => b.remaining <= 3)
+            const lowBalanceAlerts = lowBalances.slice(0, 10)
 
             // Upcoming peaks (next 30 days)
             const next30Days = new Date(
@@ -171,10 +178,10 @@ export class DashboardController {
                 pendingActions: pendingEndorsements + pendingApprovals,
                 processingBacklog:
                     pendingEndorsements > 10 || pendingApprovals > 10,
-                lowBalanceStaff: lowBalanceAlerts.length,
-                upcomingHolidays: await Holiday.countDocuments({
-                    date: { $gte: today, $lte: next30Days },
-                }),
+                lowBalanceStaff: lowBalances.length,
+                upcomingHolidays: (
+                    await Holiday.getHolidaysInRange(today, next30Days)
+                ).length,
             }
 
             const dashboard = {
@@ -208,9 +215,9 @@ export class DashboardController {
                 })),
                 monthlyTrend,
                 lowBalanceAlerts: lowBalanceAlerts.map((l) => ({
-                    staff: (l.staff as any).name,
-                    staffId: (l.staff as any).staffId,
-                    department: (l.staff as any).department,
+                    staff: (l.balance.staff as any).name,
+                    staffId: (l.balance.staff as any).staffId,
+                    department: (l.balance.staff as any).department,
                     remaining: l.remaining,
                 })),
                 upcomingPeaks: {
@@ -411,12 +418,12 @@ export class DashboardController {
                 }
             }
 
-            // Low balance alerts for team (period-based)
-            const lowBalances = await LeaveBalance.find({
+            // Low balance alerts for team (period-based, on days available to request). `remaining` is a
+            // virtual, so it's computed here rather than filtered in Mongo.
+            const teamAnnualBalances = await LeaveBalance.find({
                 leaveType: LeaveTypes.ANNUAL,
                 periodStart: { $lte: today },
                 periodEnd: { $gte: today },
-                remaining: { $lte: 3 },
             })
                 .populate({
                     path: "staff",
@@ -425,13 +432,16 @@ export class DashboardController {
                 })
                 .lean()
 
-            const teamLowBalances = lowBalances.filter((b) => b.staff)
+            const teamLowBalances = teamAnnualBalances
+                .filter((b) => b.staff)
+                .map((b) => ({ balance: b, remaining: calcAvailableForRequest(b) }))
+                .filter((b) => b.remaining <= 3)
             if (teamLowBalances.length > 0) {
                 alerts.push({
                     type: "LOW_BALANCES",
                     message: `${teamLowBalances.length} team members have low annual leave balance`,
                     details: teamLowBalances.map((b) => ({
-                        staff: (b.staff as any).name,
+                        staff: (b.balance.staff as any).name,
                         remaining: b.remaining,
                     })),
                 })
@@ -570,18 +580,20 @@ export class DashboardController {
                 periodEnd: { $gte: today },
             }).lean()
 
-            // Format balances
+            // Format balances. .lean() drops the model's virtuals, so remaining and
+            // availableForRequest are computed with the model's shared helpers.
             const myBalances = balances.map((b) => ({
                 leaveType: b.leaveType,
-                total: (b as any).total || 0,
+                allocated: b.allocated,
+                total: b.allocated,
                 used: b.used,
-                remaining: b.remaining,
+                remaining: calcRemaining(b),
                 accrued: b.accrued,
-                adjustment: (b as any).adjustment || b.adjustments || 0,
-                availableForRequest: b.availableForRequest,
+                adjustment: b.adjustments || 0,
+                availableForRequest: calcAvailableForRequest(b),
                 utilizationPercent:
-                    (b as any).total > 0
-                        ? Math.round((b.used / (b as any).total) * 100)
+                    b.allocated > 0
+                        ? Math.round((b.used / b.allocated) * 100)
                         : 0,
             }))
 
@@ -631,39 +643,44 @@ export class DashboardController {
                 .limit(5)
                 .lean()
 
-            // Annual accrual progress (if monthly accrual)
+            // Annual accrual progress, measured against the contract-anniversary
+            // period (not the calendar year)
             const annualBalance = balances.find(
                 (b) => b.leaveType === LeaveTypes.ANNUAL
             )
-            const annualAccrualProgress = annualBalance
-                ? {
-                      totalAccrued: annualBalance.accrued || 0,
-                      monthlyRate:
-                          Math.round(
-                              ((annualBalance.accrued || 0) /
-                                  (today.getMonth() + 1)) *
-                                  10
-                          ) / 10,
-                      projectedYearEnd: Math.round(
-                          ((annualBalance.accrued || 0) /
-                              (today.getMonth() + 1)) *
-                              12
-                      ),
-                      percentComplete: Math.round(
-                          ((today.getMonth() + 1) / 12) * 100
-                      ),
-                  }
+            let annualAccrualProgress = null
+            if (annualBalance) {
+                const periodMonths = getTotalMonthsInPeriod(annualBalance.periodStart, annualBalance.periodEnd)
+                const monthsElapsed = getMonthsInPeriod(annualBalance.periodStart, today)
+                annualAccrualProgress = {
+                    totalAccrued: annualBalance.accrued || 0,
+                    monthlyRate:
+                        periodMonths > 0
+                            ? Math.round((annualBalance.allocated / periodMonths) * 10) / 10
+                            : 0,
+                    projectedYearEnd: annualBalance.allocated,
+                    percentComplete:
+                        periodMonths > 0
+                            ? Math.round(Math.min(1, monthsElapsed / periodMonths) * 100)
+                            : 0,
+                }
+            }
+            const periodLabel = balances[0]
+                ? formatPeriod(balances[0].periodStart, balances[0].periodEnd)
                 : null
 
             // Alerts
             const alerts = []
 
             // Low annual leave balance
-            if (annualBalance && annualBalance.remaining <= 3) {
+            const annualSummary = myBalances.find(
+                (b) => b.leaveType === LeaveTypes.ANNUAL
+            )
+            if (annualSummary && annualSummary.availableForRequest <= 3) {
                 alerts.push({
                     type: "LOW_BALANCE",
                     severity: "warning",
-                    message: `Only ${annualBalance.remaining} days of annual leave remaining`,
+                    message: `Only ${annualSummary.availableForRequest} days of annual leave available to request`,
                     action: "Consider planning your leave utilization",
                 })
             }
@@ -780,6 +797,8 @@ export class DashboardController {
                 recentRequests: recentRequests.map((r) => ({
                     id: r._id,
                     leaveType: r.leaveType,
+                    startDate: r.startDate,
+                    endDate: r.endDate,
                     dates: `${new Date(
                         r.startDate
                     ).toLocaleDateString()} - ${new Date(
@@ -790,6 +809,7 @@ export class DashboardController {
                     submittedOn: r.createdAt,
                 })),
                 annualAccrualProgress,
+                periodLabel,
                 alerts,
                 teamOnLeave: teamOnLeave.map((s) => s.name),
                 leaveHistory: leaveHistory.map((h) => ({
@@ -803,7 +823,7 @@ export class DashboardController {
                         (sum, b) => sum + b.used,
                         0
                     ),
-                    daysRemainingThisYear: balances.reduce(
+                    daysRemainingThisYear: myBalances.reduce(
                         (sum, b) => sum + b.remaining,
                         0
                     ),
@@ -1701,12 +1721,18 @@ export class DashboardController {
     private static async calculateUtilizationRate(
         year: number
     ): Promise<number> {
-        const balances = await LeaveBalance.find({ year }).lean()
+        // Current contract-anniversary periods. `year` (periodStart's calendar
+        // year) would drop periods that began last calendar year.
+        const now = new Date()
+        const balances = await LeaveBalance.find({
+            periodStart: { $lte: now },
+            periodEnd: { $gte: now },
+        }).lean()
 
         if (balances.length === 0) return 0
 
         const totalAllocated = balances.reduce(
-            (sum, b) => sum + (b as any).total,
+            (sum, b) => sum + (b.allocated || 0),
             0
         )
         const totalUsed = balances.reduce((sum, b) => sum + b.used, 0)
@@ -1757,20 +1783,23 @@ export class DashboardController {
         }).lean()
 
         const utilization = []
+        const now = new Date()
 
         for (const staff of staffInDept) {
+            // Current contract-anniversary period, not periodStart's calendar year
             const balances = await LeaveBalance.find({
                 staff: staff._id,
-                year,
+                periodStart: { $lte: now },
+                periodEnd: { $gte: now },
             }).lean()
 
             const totalAllocated = balances.reduce(
-                (sum, b) => sum + (b as any).total,
+                (sum, b) => sum + (b.allocated || 0),
                 0
             )
             const totalUsed = balances.reduce((sum, b) => sum + b.used, 0)
             const totalRemaining = balances.reduce(
-                (sum, b) => sum + b.remaining,
+                (sum, b) => sum + calcRemaining(b),
                 0
             )
 

@@ -1,4 +1,5 @@
 import { createCookieSessionStorage } from "react-router"
+import { getSessionSecrets } from "~/utils/session-secrets"
 
 const { getSession, commitSession, destroySession } =
     createCookieSessionStorage<{
@@ -15,6 +16,7 @@ const { getSession, commitSession, destroySession } =
             sameSite: "lax",
             secure: process.env.NODE_ENV === "production",
             maxAge: 1,
+            secrets: getSessionSecrets(),
         },
     })
 

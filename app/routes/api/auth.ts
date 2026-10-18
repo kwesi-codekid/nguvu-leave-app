@@ -3,7 +3,6 @@ import {
     type LoaderFunctionArgs,
 } from "react-router"
 import bcrypt from "bcryptjs"
-import jwt, { Secret, SignOptions, VerifyOptions } from "jsonwebtoken"
 import {
     successResponse,
     errorResponse,
@@ -16,12 +15,44 @@ import { connectDB } from "~/database/connect"
 import { z } from "zod"
 import sendSMS from "~/utils/sendSMS"
 import { EmailService } from "~/services/email.service"
+import {
+    signAccessToken,
+    signRefreshToken,
+    verifyAccessToken,
+    verifyRefreshToken,
+} from "~/utils/auth-token"
+import {
+    CODE_LENGTH,
+    CODE_PATTERN,
+    generateCode,
+    verifyStaffCode,
+    storeStaffCode,
+    reserveCodeSend,
+    reservePasswordAttempt,
+    recordPasswordResult,
+    clearPasswordLockout,
+    type CodeCheckResult,
+    type CodeSendResult,
+} from "~/utils/auth-codes"
+import {
+    checkAuthFailureBudget,
+    formatWait,
+    recordAuthFailure,
+    resolveClientIp,
+} from "~/utils/rate-limit"
 
-// Environment variables
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "15m"
-const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || "7d"
 const OTP_EXPIRES_IN = 5 * 60 * 1000 // 5 minutes in milliseconds
+const RESET_CODE_EXPIRES_IN = 15 * 60 * 1000 // 15 minutes in milliseconds
+
+// Unauthenticated operations gated by the per-IP failure budget
+const RATE_LIMITED_OPS = new Set([
+    "login",
+    "send-otp",
+    "resend-otp",
+    "verify-otp",
+    "forgot-password",
+    "reset-password",
+])
 
 // Helper function to validate and provide user-friendly errors
 function validateSendOtpInput(body: any): {
@@ -115,9 +146,9 @@ function validateVerifyOtpInput(body: any): {
         errors.push({ field: "otp", message: "OTP code is required" })
     } else if (typeof body.otp !== "string") {
         errors.push({ field: "otp", message: "OTP must be a valid string" })
-    } else if (body.otp.length !== 4) {
-        errors.push({ field: "otp", message: "OTP must be exactly 4 digits" })
-    } else if (!/^\d{4}$/.test(body.otp)) {
+    } else if (body.otp.length !== CODE_LENGTH) {
+        errors.push({ field: "otp", message: `OTP must be exactly ${CODE_LENGTH} digits` })
+    } else if (!CODE_PATTERN.test(body.otp)) {
         errors.push({ field: "otp", message: "OTP must contain only digits" })
     }
 
@@ -153,12 +184,12 @@ function validateResetPasswordInput(body: any): {
             field: "code",
             message: "Reset code must be a valid string",
         })
-    } else if (body.code.length !== 4) {
+    } else if (body.code.length !== CODE_LENGTH) {
         errors.push({
             field: "code",
-            message: "Reset code must be exactly 4 digits",
+            message: `Reset code must be exactly ${CODE_LENGTH} digits`,
         })
-    } else if (!/^\d{4}$/.test(body.code)) {
+    } else if (!CODE_PATTERN.test(body.code)) {
         errors.push({
             field: "code",
             message: "Reset code must contain only digits",
@@ -199,7 +230,7 @@ const loginSchema = z
             .regex(/^\+?[0-9]{10,15}$/)
             .optional(),
         password: z.string().optional(),
-        otp: z.string().length(4).optional(),
+        otp: z.string().regex(CODE_PATTERN).optional(),
     })
     .refine(
         (data) => {
@@ -218,7 +249,7 @@ const forgotPasswordSchema = z.object({
 
 const resetPasswordSchema = z.object({
     phone: z.string().regex(/^\+?[0-9]{10,15}$/),
-    code: z.string().length(4),
+    code: z.string().regex(CODE_PATTERN),
     newPassword: z.string().min(8).max(100),
 })
 
@@ -253,35 +284,57 @@ const updateProfileSchema = z.object({
 })
 
 // Helper functions
-function generateOTP(): string {
-    return Math.floor(1000 + Math.random() * 9000).toString()
-}
-
 function generateToken(staffId: string): string {
-    const options: SignOptions = {
-        expiresIn: JWT_EXPIRES_IN as any,
-    }
-    return jwt.sign({ staffId }, JWT_SECRET, options)
+    return signAccessToken(staffId)
 }
 
 function generateRefreshToken(staffId: string): string {
-    const options: SignOptions = {
-        expiresIn: REFRESH_TOKEN_EXPIRES_IN as any,
-    }
-    return jwt.sign({ staffId, type: "refresh" }, JWT_SECRET, options)
+    return signRefreshToken(staffId)
 }
 
-interface TokenPayload {
-    staffId: string
-    type?: string
+// Map a failed code check to an API error response
+function codeErrorResponse(result: CodeCheckResult, label: string) {
+    switch (result) {
+        case "missing":
+            return errorResponse(
+                `No ${label} request found. Please request a new ${label}`,
+                null,
+                400
+            )
+        case "expired":
+            return errorResponse(
+                `${label.charAt(0).toUpperCase()}${label.slice(1)} has expired. Please request a new one`,
+                null,
+                400
+            )
+        case "too_many_attempts":
+            return errorResponse(
+                `Too many incorrect attempts. Please request a new ${label}`,
+                null,
+                429
+            )
+        default:
+            return errorResponse(`Invalid ${label}`, null, 401)
+    }
 }
 
-function verifyToken(token: string): TokenPayload {
-    try {
-        return jwt.verify(token, JWT_SECRET) as TokenPayload
-    } catch (error) {
-        throw new Error("Invalid or expired token")
+// Error response when a code cannot be sent yet (cooldown or send limits)
+function codeSendLimitedResponse(
+    result: Exclude<CodeSendResult, { allowed: true }>
+) {
+    const wait = formatWait(result.retryAfterSeconds)
+    let message: string
+    switch (result.reason) {
+        case "cooldown":
+            message = `Please wait ${wait} before requesting another code`
+            break
+        case "global_limit":
+            message = `Verification codes are temporarily unavailable. Please try again in ${wait}`
+            break
+        default:
+            message = `Too many codes requested for this account. Please try again in ${wait}`
     }
+    return errorResponse(message, null, 429)
 }
 
 async function getAuthenticatedStaff(
@@ -295,7 +348,7 @@ async function getAuthenticatedStaff(
     }
 
     try {
-        const decoded = verifyToken(token)
+        const decoded = verifyAccessToken(token)
         await connectDB()
 
         const staff = await Staff.findById(decoded.staffId)
@@ -345,10 +398,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
                 )
         }
     } catch (error) {
+        // Log the detail server-side; don't leak internals to the client
         console.error("Auth loader error:", error)
-        const message =
-            error instanceof Error ? error.message : "An error occurred"
-        return errorResponse(message, null, 500)
+        return errorResponse(
+            "An unexpected error occurred. Please try again.",
+            null,
+            500
+        )
     }
 }
 
@@ -483,7 +539,8 @@ async function handlePatchOperations(
 async function handlePostOperations(
     request: Request,
     op: string | null,
-    body: any
+    body: any,
+    clientIp: string | null
 ): Promise<Response> {
     switch (op) {
         case "login": {
@@ -506,49 +563,46 @@ async function handlePostOperations(
             const staff = await Staff.findOne({
                 ...query,
                 status: AccountStatus.ACTIVE,
-            }).select("+passwordHash +otpCodeHash +otpExpiresAt")
+            }).select("+passwordHash")
 
             if (!staff) {
+                recordAuthFailure(clientIp)
                 return errorResponse("Invalid credentials", null, 401)
             }
 
             // Handle password-based login
             if (email && password) {
+                // Lock password login after repeated failures
+                const attempt = await reservePasswordAttempt(staff._id)
+                if (!attempt.allowed) {
+                    return errorResponse(
+                        `Too many failed login attempts. Please try again in ${formatWait(attempt.retryAfterSeconds)}`,
+                        null,
+                        429
+                    )
+                }
+
                 const isValidPassword = await bcrypt.compare(
                     password,
                     staff.passwordHash || ""
                 )
+                await recordPasswordResult(
+                    staff._id,
+                    isValidPassword,
+                    attempt.attempts
+                )
                 if (!isValidPassword) {
+                    recordAuthFailure(clientIp)
                     return errorResponse("Invalid credentials", null, 401)
                 }
             }
             // Handle OTP-based login
             else if (phone && otp) {
-                if (!staff.otpCodeHash || !staff.otpExpiresAt) {
-                    return errorResponse(
-                        "No OTP request found. Please request a new OTP",
-                        null,
-                        400
-                    )
+                const result = await verifyStaffCode(staff._id, "otp", otp)
+                if (result !== "valid") {
+                    recordAuthFailure(clientIp)
+                    return codeErrorResponse(result, "OTP")
                 }
-
-                if (new Date() > staff.otpExpiresAt) {
-                    return errorResponse(
-                        "OTP has expired. Please request a new one",
-                        null,
-                        400
-                    )
-                }
-
-                const isValidOTP = await bcrypt.compare(otp, staff.otpCodeHash)
-                if (!isValidOTP) {
-                    return errorResponse("Invalid OTP", null, 401)
-                }
-
-                // Clear OTP after successful verification
-                staff.otpCodeHash = undefined
-                staff.otpExpiresAt = undefined
-                await staff.save()
             }
             // Phone without OTP - send OTP and ask user to verify
             else if (phone && !otp) {
@@ -598,14 +652,15 @@ async function handlePostOperations(
 
             const { phone, email } = body
 
-            // Find staff by phone or email - include hidden OTP fields
+            // Find staff by phone or email
             const query = phone ? { phone } : { email }
             const staff = await Staff.findOne({
                 ...query,
                 status: AccountStatus.ACTIVE,
-            }).select("+otpCodeHash +otpExpiresAt")
+            })
 
             if (!staff) {
+                recordAuthFailure(clientIp)
                 return errorResponse(
                     `No account found with this ${phone ? "phone number" : "email address"}`,
                     null,
@@ -613,28 +668,15 @@ async function handlePostOperations(
                 )
             }
 
-            // Check for rate limiting (last OTP sent within 30 seconds)
-            if (staff.otpExpiresAt) {
-                const timeSinceLastOTP =
-                    Date.now() - (staff.otpExpiresAt.getTime() - OTP_EXPIRES_IN)
-                if (timeSinceLastOTP < 30000) {
-                    // 30 seconds
-                    return errorResponse(
-                        "Please wait before requesting another OTP",
-                        null,
-                        429
-                    )
-                }
+            // Per-account limits: 30s cooldown and a daily cap on codes sent
+            const sendSlot = await reserveCodeSend(staff._id, clientIp)
+            if (!sendSlot.allowed) {
+                return codeSendLimitedResponse(sendSlot)
             }
 
-            // Generate and hash OTP
-            const otp = generateOTP()
-            const otpHash = await bcrypt.hash(otp, 10)
-
-            // Save OTP hash and expiry
-            staff.otpCodeHash = otpHash
-            staff.otpExpiresAt = new Date(Date.now() + OTP_EXPIRES_IN)
-            await staff.save()
+            // Generate and store a new OTP (resets the attempt counter)
+            const otp = generateCode()
+            await storeStaffCode(staff._id, "otp", otp, OTP_EXPIRES_IN)
 
             // Send OTP via SMS for phone, or email for email
             if (phone) {
@@ -686,42 +728,23 @@ async function handlePostOperations(
 
             const { phone, email, otp } = body
 
-            // Find staff and verify OTP - MUST select the hidden OTP fields
+            // Find staff, then verify the OTP (attempt-limited, single use)
             const query = phone ? { phone } : { email }
             const staff = await Staff.findOne({
                 ...query,
                 status: AccountStatus.ACTIVE,
-            }).select("+otpCodeHash +otpExpiresAt")
+            })
 
             if (!staff) {
+                recordAuthFailure(clientIp)
                 return errorResponse(`Invalid ${phone ? "phone number" : "email address"}`, null, 401)
             }
 
-            if (!staff.otpCodeHash || !staff.otpExpiresAt) {
-                return errorResponse(
-                    "No OTP request found. Please request a new OTP",
-                    null,
-                    400
-                )
+            const otpResult = await verifyStaffCode(staff._id, "otp", otp)
+            if (otpResult !== "valid") {
+                recordAuthFailure(clientIp)
+                return codeErrorResponse(otpResult, "OTP")
             }
-
-            if (new Date() > staff.otpExpiresAt) {
-                return errorResponse(
-                    "OTP has expired. Please request a new one",
-                    null,
-                    400
-                )
-            }
-
-            const isValidOTP = await bcrypt.compare(otp, staff.otpCodeHash)
-            if (!isValidOTP) {
-                return errorResponse("Invalid OTP", null, 401)
-            }
-
-            // Clear OTP after successful verification
-            staff.otpCodeHash = undefined
-            staff.otpExpiresAt = undefined
-            await staff.save()
 
             // Generate tokens
             const token = generateToken(staff._id.toString())
@@ -754,14 +777,15 @@ async function handlePostOperations(
 
             const { phone, email } = body
 
-            // Find staff - include hidden OTP fields
+            // Find staff
             const query = phone ? { phone } : { email }
             const staff = await Staff.findOne({
                 ...query,
                 status: AccountStatus.ACTIVE,
-            }).select("+otpCodeHash +otpExpiresAt")
+            })
 
             if (!staff) {
+                recordAuthFailure(clientIp)
                 return errorResponse(
                     `No account found with this ${phone ? "phone number" : "email address"}`,
                     null,
@@ -769,29 +793,15 @@ async function handlePostOperations(
                 )
             }
 
-            // Rate limiting - wait at least 30 seconds between OTP requests
-            if (staff.otpExpiresAt) {
-                const timeSinceLastOTP =
-                    Date.now() - (staff.otpExpiresAt.getTime() - OTP_EXPIRES_IN)
-                if (timeSinceLastOTP < 30000) {
-                    const waitTime = Math.ceil(
-                        (30000 - timeSinceLastOTP) / 1000
-                    )
-                    return errorResponse(
-                        `Please wait ${waitTime} seconds before requesting another OTP`,
-                        null,
-                        429
-                    )
-                }
+            // Per-account limits: 30s cooldown and a daily cap on codes sent
+            const sendSlot = await reserveCodeSend(staff._id, clientIp)
+            if (!sendSlot.allowed) {
+                return codeSendLimitedResponse(sendSlot)
             }
 
-            // Generate new OTP
-            const otp = generateOTP()
-            const otpHash = await bcrypt.hash(otp, 10)
-
-            staff.otpCodeHash = otpHash
-            staff.otpExpiresAt = new Date(Date.now() + OTP_EXPIRES_IN)
-            await staff.save()
+            // Generate and store a new OTP (resets the attempt counter)
+            const otp = generateCode()
+            await storeStaffCode(staff._id, "otp", otp, OTP_EXPIRES_IN)
 
             // Send OTP
             if (phone) {
@@ -840,11 +850,8 @@ async function handlePostOperations(
             }
 
             try {
-                const decoded = verifyToken(refreshToken)
-
-                if (decoded.type !== "refresh") {
-                    return errorResponse("Invalid refresh token", null, 401)
-                }
+                // Throws unless the token is a valid refresh token
+                const decoded = verifyRefreshToken(refreshToken)
 
                 // Verify staff still exists and is active
                 const staff = await Staff.findById(decoded.staffId)
@@ -882,26 +889,40 @@ async function handlePostOperations(
 
             const { phone } = body
 
-            // Find staff - include hidden reset code fields
+            if (!phone) {
+                return validationErrorResponse("Validation failed", [
+                    { field: "phone", message: "Phone number is required" },
+                ])
+            }
+
+            // Find staff
             const staff = await Staff.findOne({
                 phone,
                 status: AccountStatus.ACTIVE,
-            }).select("+resetCodeHash +resetCodeExpiresAt")
+            })
 
             if (!staff) {
                 // Don't reveal if phone exists for security
+                recordAuthFailure(clientIp)
                 return successResponse(
                     "If an account exists with this phone number, a reset code will be sent"
                 )
             }
 
-            // Generate reset code
-            const resetCode = generateOTP()
-            const resetCodeHash = await bcrypt.hash(resetCode, 10)
+            // Same per-account cooldown and daily cap as login OTPs
+            const sendSlot = await reserveCodeSend(staff._id, clientIp)
+            if (!sendSlot.allowed) {
+                return codeSendLimitedResponse(sendSlot)
+            }
 
-            staff.resetCodeHash = resetCodeHash
-            staff.resetCodeExpiresAt = new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
-            await staff.save()
+            // Generate and store reset code (resets the attempt counter)
+            const resetCode = generateCode()
+            await storeStaffCode(
+                staff._id,
+                "reset",
+                resetCode,
+                RESET_CODE_EXPIRES_IN
+            )
 
             // Send reset code via SMS
             await sendSMS({
@@ -923,40 +944,34 @@ async function handlePostOperations(
 
             const { phone, code, newPassword } = body
 
-            // Find staff - include hidden reset code and password fields
+            // Find staff - include hidden password fields
             const staff = await Staff.findOne({
                 phone,
                 status: AccountStatus.ACTIVE,
-            }).select(
-                "+resetCodeHash +resetCodeExpiresAt +passwordHash +passwordLastChangedAt"
-            )
+            }).select("+passwordHash +passwordLastChangedAt")
 
-            if (!staff || !staff.resetCodeHash || !staff.resetCodeExpiresAt) {
+            if (!staff) {
+                recordAuthFailure(clientIp)
                 return errorResponse("Invalid or expired reset code", null, 400)
             }
 
-            if (new Date() > staff.resetCodeExpiresAt) {
-                return errorResponse(
-                    "Reset code has expired. Please request a new one",
-                    null,
-                    400
-                )
-            }
-
-            const isValidCode = await bcrypt.compare(code, staff.resetCodeHash)
-            if (!isValidCode) {
-                return errorResponse("Invalid reset code", null, 401)
+            // Attempt-limited, single-use check (clears the code when valid)
+            const codeResult = await verifyStaffCode(staff._id, "reset", code)
+            if (codeResult !== "valid") {
+                recordAuthFailure(clientIp)
+                return codeErrorResponse(codeResult, "reset code")
             }
 
             // Hash new password
             const passwordHash = await bcrypt.hash(newPassword, 10)
 
-            // Update password and clear reset code
+            // Update password
             staff.passwordHash = passwordHash
-            staff.resetCodeHash = undefined
-            staff.resetCodeExpiresAt = undefined
             staff.passwordLastChangedAt = new Date()
             await staff.save()
+
+            // A successful reset lifts any password-login lockout
+            await clearPasswordLockout(staff._id)
 
             return successResponse("Password reset successfully")
         }
@@ -980,6 +995,22 @@ export async function action({ request }: ActionFunctionArgs) {
         return errorResponse("Method not allowed", null, 405)
     }
 
+    // Per-IP gate on unauthenticated auth operations. Only failures count
+    // toward the budget, so successful logins from a shared office/NAT IP do
+    // not throttle each other. Calls from the login pages carry the
+    // browser's IP (see utils/rate-limit.ts).
+    const clientIp = resolveClientIp(request)
+    if (request.method === "POST" && op && RATE_LIMITED_OPS.has(op)) {
+        const budget = checkAuthFailureBudget(clientIp)
+        if (!budget.allowed) {
+            return errorResponse(
+                `Too many failed attempts. Please try again in ${formatWait(budget.retryAfterSeconds)}`,
+                null,
+                429
+            )
+        }
+    }
+
     try {
         await connectDB()
         const body = await request.json()
@@ -990,14 +1021,17 @@ export async function action({ request }: ActionFunctionArgs) {
         }
 
         if (request.method === "POST") {
-            return await handlePostOperations(request, op, body)
+            return await handlePostOperations(request, op, body, clientIp)
         }
 
         return errorResponse("Method not allowed", null, 405)
     } catch (error) {
+        // Log the detail server-side; don't leak internals to the client
         console.error("Auth action error:", error)
-        const message =
-            error instanceof Error ? error.message : "An error occurred"
-        return errorResponse(message, null, 500)
+        return errorResponse(
+            "An unexpected error occurred. Please try again.",
+            null,
+            500
+        )
     }
 }

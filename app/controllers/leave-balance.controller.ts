@@ -1,5 +1,5 @@
 import { Request } from "express"
-import LeaveBalance from "../models/leave-balance.model"
+import LeaveBalance, { appendNote } from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import StaffContract from "../models/staff-contract.model"
 import Department from "../models/department.model"
@@ -145,7 +145,7 @@ export class LeaveBalanceController {
             leaveType,
             periodStart: { $lte: now },
             periodEnd: { $gte: now },
-        })
+        }).sort({ periodStart: -1 })
     }
 
     /**
@@ -930,9 +930,7 @@ export class LeaveBalanceController {
             const adjustmentNote = `${timestamp}: Adjustment of ${
                 adjustment > 0 ? "+" : ""
             }${adjustment} days - ${reason}`
-            balance.notes = balance.notes
-                ? `${balance.notes}\n${adjustmentNote}`
-                : adjustmentNote
+            balance.notes = appendNote(balance.notes, adjustmentNote)
 
             await balance.save()
 
@@ -1666,6 +1664,20 @@ export class LeaveBalanceController {
     static async validateLeaveRequest(req: Request): Promise<ResponseObject> {
         try {
             const { staffId, leaveType, days } = req.body
+            const user = (req as AuthenticatedRequest).user
+
+            // Check permissions (same rule as viewing balances)
+            const canView =
+                user?.permissions?.includes("HR") ||
+                user?.permissions?.includes("ADMIN") ||
+                user?.permissions?.includes("MANAGER") ||
+                String(staffId) === user?._id?.toString()
+
+            if (!canView) {
+                return errorResponseObject(
+                    "Unauthorized to validate requests for this staff member"
+                )
+            }
 
             // Validation
             const errors = []

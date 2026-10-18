@@ -11,9 +11,7 @@ import {
 import { connectDB } from "~/database/connect"
 import HolidayController from "~/controllers/holiday.controller"
 import Staff from "~/models/staff.model"
-import jwt from "jsonwebtoken"
-
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
+import { verifyAccessToken } from "~/utils/auth-token"
 
 // Helper to get authenticated staff from request
 async function getAuthenticatedStaff(request: Request) {
@@ -25,7 +23,7 @@ async function getAuthenticatedStaff(request: Request) {
     }
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET) as { staffId: string }
+        const decoded = verifyAccessToken(token)
         await connectDB()
 
         const staff = await Staff.findById(decoded.staffId)

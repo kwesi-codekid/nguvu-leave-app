@@ -7,6 +7,7 @@ import {
     validationErrorResponseObject,
 } from "../utils/api-utils"
 import { HolidayTypes, AuditAction, ResponseObject } from "../utils/types"
+import { escapeRegex } from "../utils/regex"
 
 export class HolidayController {
     /**
@@ -86,7 +87,7 @@ export class HolidayController {
             // Check for duplicate holidays
             console.log("Checking for duplicate holidays...")
             const existingQuery: any = {
-                name: { $regex: new RegExp(`^${name.trim()}$`, "i") },
+                name: { $regex: new RegExp(`^${escapeRegex(name.trim())}$`, "i") },
             }
 
             const existing = await Holiday.findOne(existingQuery)
@@ -167,7 +168,7 @@ export class HolidayController {
 
             // Free text search on name and description
             if (search && typeof search === "string" && search.trim()) {
-                const searchTerm = search.trim()
+                const searchTerm = escapeRegex(search.trim())
                 query.$or = [
                     { name: { $regex: searchTerm, $options: "i" } },
                     { description: { $regex: searchTerm, $options: "i" } },

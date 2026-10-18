@@ -2,13 +2,14 @@ import { Request } from "express"
 import mongoose from "mongoose"
 import CallIn from "../models/call-in.model"
 import LeaveRequest from "../models/leave-request.model"
-import LeaveBalance from "../models/leave-balance.model"
+import LeaveBalance, { appendNote } from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import Department from "../models/department.model"
 import StaffContract from "../models/staff-contract.model"
 import JobPosition from "../models/job-position.model"
 import Holiday from "../models/holiday.model"
 import AuditLogController from "./audit-log.controller"
+import { escapeRegex } from "../utils/regex"
 import NotificationController from "./notification.controller"
 import SMSService from "../services/sms.service"
 import {
@@ -99,7 +100,7 @@ export class CallInController {
             }
 
             if (errors.length > 0) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return validationErrorResponseObject(
                     "Validation failed",
                     errors
@@ -113,12 +114,12 @@ export class CallInController {
                 .session(session)
 
             if (!leaveRequest) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return errorResponseObject("Leave request not found")
             }
 
             if (leaveRequest.status !== LeaveStatus.APPROVED) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return errorResponseObject(
                     "Can only call in staff from approved leave"
                 )
@@ -144,7 +145,7 @@ export class CallInController {
             }
 
             if (!hasPermission) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return errorResponseObject(
                     "Only HR, Admin, or position-based approvers can create call-ins"
                 )
@@ -154,7 +155,7 @@ export class CallInController {
                 leaveRequest.department
             ).session(session)
             if (!department) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return errorResponseObject("Department not found")
             }
 
@@ -167,14 +168,14 @@ export class CallInController {
             const leaveEnd = new Date(leaveRequest.endDate)
 
             if (callStart < leaveStart || callEnd > leaveEnd) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return errorResponseObject(
                     "Call-in dates must be within the original leave period"
                 )
             }
 
             if (callStart > callEnd) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return errorResponseObject(
                     "Call-in start date must be before or equal to end date"
                 )
@@ -192,7 +193,7 @@ export class CallInController {
             }).session(session)
 
             if (existingCallIn) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return errorResponseObject(
                     "Overlapping call-in already exists for this leave period"
                 )
@@ -206,7 +207,7 @@ export class CallInController {
             }
 
             if (calculatedWorkingDays <= 0) {
-                if (session) await session.abortTransaction()
+                if (session) await session?.abortTransaction()
                 return errorResponseObject(
                     "Call-in period contains no working days (only weekends/holidays)"
                 )
@@ -228,7 +229,7 @@ export class CallInController {
             let callIn
             if (session) {
                 callIn = await CallIn.create([callInData], { session })
-                await session.commitTransaction()
+                await session?.commitTransaction()
             } else {
                 const newCallIn = await CallIn.create(callInData)
                 callIn = [newCallIn]
@@ -315,13 +316,13 @@ export class CallInController {
                 populatedCallIn
             )
         } catch (error) {
-            if (session) await session.abortTransaction()
+            if (session) await session?.abortTransaction()
             console.error("Error creating call-in:", error)
             return errorResponseObject(
                 (error as any).message || "Failed to create call-in"
             )
         } finally {
-            if (session) await session.endSession()
+            if (session) await session?.endSession()
         }
     }
 
@@ -333,15 +334,17 @@ export class CallInController {
         req: Request,
         id: string
     ): Promise<ResponseObject> {
-        const session = await mongoose.startSession()
-        session.startTransaction()
+        // Only use transactions if in replica set mode (a standalone MongoDB
+        // rejects them, which made this operation always fail in production)
+        const session: any = this.isReplicaSet() ? await mongoose.startSession() : null
+        session?.startTransaction()
 
         try {
             const { callInStartDate, callInEndDate, reason } = req.body
             const user = (req as any).user
 
             if (!id) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return validationErrorResponseObject("Validation failed", [
                     { field: "id", message: "Call-in ID is required" },
                 ])
@@ -354,7 +357,7 @@ export class CallInController {
                 .session(session)
 
             if (!callIn) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return errorResponseObject("Call-in not found")
             }
 
@@ -365,7 +368,7 @@ export class CallInController {
                 user?.permissions?.includes("ADMIN")
 
             if (!isCreator && !hasPermission) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return errorResponseObject(
                     "Unauthorized to update this call-in"
                 )
@@ -376,7 +379,7 @@ export class CallInController {
                 (Date.now() - new Date((callIn as any).createdAt).getTime()) /
                 (1000 * 60 * 60)
             if (hoursSinceCreation > 24 && !hasPermission) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return errorResponseObject(
                     "Call-ins can only be updated within 24 hours of creation"
                 )
@@ -400,7 +403,7 @@ export class CallInController {
                     callIn.leaveRequest
                 ).session(session)
                 if (!leaveRequest) {
-                    await session.abortTransaction()
+                    await session?.abortTransaction()
                     return errorResponseObject(
                         "Associated leave request not found"
                     )
@@ -410,14 +413,14 @@ export class CallInController {
                     newStartDate < leaveRequest.startDate ||
                     newEndDate > leaveRequest.endDate
                 ) {
-                    await session.abortTransaction()
+                    await session?.abortTransaction()
                     return errorResponseObject(
                         "Call-in dates must be within the original leave period"
                     )
                 }
 
                 if (newStartDate > newEndDate) {
-                    await session.abortTransaction()
+                    await session?.abortTransaction()
                     return errorResponseObject(
                         "Start date must be before or equal to end date"
                     )
@@ -436,7 +439,7 @@ export class CallInController {
                 }).session(session)
 
                 if (overlapping) {
-                    await session.abortTransaction()
+                    await session?.abortTransaction()
                     return errorResponseObject(
                         "New dates would overlap with another call-in"
                     )
@@ -470,14 +473,15 @@ export class CallInController {
                 if (newWorkingDays !== oldWorkingDays) {
                     updates.workingDaysRecovered = newWorkingDays
 
-                    // Adjust balance (period-based)
-                    const balanceDate = new Date()
+                    // Adjust balance (period-based): the period the leave was
+                    // debited from, i.e. the one containing its start date
+                    const balanceDate = new Date(leaveRequest.startDate)
                     const balance = await LeaveBalance.findOne({
                         staff: (callIn.staff as any)._id,
                         leaveType: leaveRequest.leaveType,
                         periodStart: { $lte: balanceDate },
                         periodEnd: { $gte: balanceDate },
-                    }).session(session)
+                    }).sort({ periodStart: -1 }).session(session)
 
                     if (balance) {
                         const daysDifference = newWorkingDays - oldWorkingDays
@@ -489,9 +493,7 @@ export class CallInController {
                         const note = `Call-in updated: ${
                             daysDifference > 0 ? "+" : ""
                         }${daysDifference} days adjustment`
-                        balance.notes = balance.notes
-                            ? `${balance.notes}\n${note}`
-                            : note
+                        balance.notes = appendNote(balance.notes, note)
 
                         await balance.save({ session })
                     }
@@ -501,7 +503,7 @@ export class CallInController {
             // Handle reason change
             if (reason !== undefined) {
                 if (reason.trim().length < 10) {
-                    await session.abortTransaction()
+                    await session?.abortTransaction()
                     return errorResponseObject(
                         "Reason must be at least 10 characters"
                     )
@@ -517,7 +519,7 @@ export class CallInController {
             }
 
             if (Object.keys(updates).length === 0) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return successResponseObject("No changes to update", callIn)
             }
 
@@ -531,7 +533,7 @@ export class CallInController {
                 .populate("leaveRequest", "leaveType")
                 .populate("requestedBy", "name")
 
-            await session.commitTransaction()
+            await session?.commitTransaction()
 
             // Log to audit
             await AuditLogController.createAuditLog({
@@ -581,11 +583,11 @@ export class CallInController {
                 updatedCallIn
             )
         } catch (error) {
-            await session.abortTransaction()
+            await session?.abortTransaction()
             console.error("Error updating call-in:", error)
             return errorResponseObject("Failed to update call-in")
         } finally {
-            session.endSession()
+            session?.endSession()
         }
     }
 
@@ -597,22 +599,24 @@ export class CallInController {
         req: Request,
         id: string
     ): Promise<ResponseObject> {
-        const session = await mongoose.startSession()
-        session.startTransaction()
+        // Only use transactions if in replica set mode (a standalone MongoDB
+        // rejects them, which made this operation always fail in production)
+        const session: any = this.isReplicaSet() ? await mongoose.startSession() : null
+        session?.startTransaction()
 
         try {
             const { cancellationReason } = req.body
             const user = (req as any).user
 
             if (!id) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return validationErrorResponseObject("Validation failed", [
                     { field: "id", message: "Call-in ID is required" },
                 ])
             }
 
             if (!cancellationReason || cancellationReason.trim().length < 10) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return validationErrorResponseObject("Validation failed", [
                     {
                         field: "cancellationReason",
@@ -628,7 +632,7 @@ export class CallInController {
                 .session(session)
 
             if (!callIn) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return errorResponseObject("Call-in not found")
             }
 
@@ -639,7 +643,7 @@ export class CallInController {
                 user?.permissions?.includes("ADMIN")
 
             if (!isCreator && !hasPermission) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return errorResponseObject(
                     "Unauthorized to cancel this call-in"
                 )
@@ -650,29 +654,28 @@ export class CallInController {
                 (Date.now() - new Date((callIn as any).createdAt).getTime()) /
                 (1000 * 60 * 60)
             if (hoursSinceCreation > 48 && !hasPermission) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return errorResponseObject(
                     "Call-ins can only be cancelled within 48 hours of creation"
                 )
             }
 
-            // Reverse balance credit (period-based)
-            const cancelDate = new Date()
+            // Reverse balance credit (period-based): the period the call-in
+            // credited, i.e. the one containing the leave's start date
+            const cancelDate = new Date((callIn.leaveRequest as any).startDate)
             const balance = await LeaveBalance.findOne({
                 staff: callIn.staff,
                 leaveType: (callIn.leaveRequest as any).leaveType,
                 periodStart: { $lte: cancelDate },
                 periodEnd: { $gte: cancelDate },
-            }).session(session)
+            }).sort({ periodStart: -1 }).session(session)
 
             if (balance) {
                 // Re-debit the days that were credited
                 balance.used = balance.used + callIn.workingDaysRecovered
 
                 const note = `Call-in cancelled: ${callIn.workingDaysRecovered} days re-debited`
-                balance.notes = balance.notes
-                    ? `${balance.notes}\n${note}`
-                    : note
+                balance.notes = appendNote(balance.notes, note)
 
                 await balance.save({ session })
             }
@@ -680,7 +683,7 @@ export class CallInController {
             // Delete the call-in
             await CallIn.findByIdAndDelete(id, { session })
 
-            await session.commitTransaction()
+            await session?.commitTransaction()
 
             // Log to audit
             await AuditLogController.createAuditLog({
@@ -735,11 +738,11 @@ export class CallInController {
                 message: "Balance has been adjusted accordingly",
             })
         } catch (error) {
-            await session.abortTransaction()
+            await session?.abortTransaction()
             console.error("Error cancelling call-in:", error)
             return errorResponseObject("Failed to cancel call-in")
         } finally {
-            session.endSession()
+            session?.endSession()
         }
     }
 
@@ -2056,8 +2059,10 @@ export class CallInController {
      * POST /api/call-ins/bulk
      */
     static async createBulkCallIns(req: Request): Promise<ResponseObject> {
-        const session = await mongoose.startSession()
-        session.startTransaction()
+        // Only use transactions if in replica set mode (a standalone MongoDB
+        // rejects them, which made this operation always fail in production)
+        const session: any = this.isReplicaSet() ? await mongoose.startSession() : null
+        session?.startTransaction()
 
         try {
             const { callIns } = req.body
@@ -2068,14 +2073,14 @@ export class CallInController {
                 !user?.permissions?.includes("HR") &&
                 !user?.permissions?.includes("ADMIN")
             ) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return errorResponseObject(
                     "Only HR/Admin can create bulk call-ins"
                 )
             }
 
             if (!callIns || !Array.isArray(callIns) || callIns.length === 0) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return validationErrorResponseObject("Validation failed", [
                     {
                         field: "callIns",
@@ -2169,14 +2174,14 @@ export class CallInController {
             }
 
             if (results.successful.length === 0) {
-                await session.abortTransaction()
+                await session?.abortTransaction()
                 return errorResponseObject(
                     "All call-ins failed to create",
                     results
                 )
             }
 
-            await session.commitTransaction()
+            await session?.commitTransaction()
 
             // Log bulk operation
             await AuditLogController.createAuditLog({
@@ -2204,11 +2209,11 @@ export class CallInController {
                 results
             )
         } catch (error) {
-            await session.abortTransaction()
+            await session?.abortTransaction()
             console.error("Error creating bulk call-ins:", error)
             return errorResponseObject("Failed to create bulk call-ins")
         } finally {
-            session.endSession()
+            session?.endSession()
         }
     }
 
@@ -2244,18 +2249,29 @@ export class CallInController {
 
             for (const callIn of recentCallIns) {
                 try {
-                    // Check if already processed by looking at balance (period-based)
-                    const checkDate = new Date()
+                    // Already credited (flag set by processCallIn)
+                    if ((callIn as any).balanceCreditedAt) {
+                        results.alreadyProcessed.push(
+                            (callIn._id as any).toString()
+                        )
+                        continue
+                    }
+
+                    // Call-ins from before the flag existed: look for
+                    // processCallIn's note in the balance it credits, i.e. the
+                    // period containing the leave's start date
+                    const checkDate = new Date((callIn.leaveRequest as any).startDate)
                     const balance = await LeaveBalance.findOne({
                         staff: callIn.staff,
                         leaveType: (callIn.leaveRequest as any).leaveType,
                         periodStart: { $lte: checkDate },
                         periodEnd: { $gte: checkDate },
-                    })
+                    }).sort({ periodStart: -1 })
 
-                    // Check if the balance notes mention this call-in
+                    const leaveRequestId = ((callIn.leaveRequest as any)._id ?? callIn.leaveRequest).toString()
                     if (
-                        balance?.notes?.includes((callIn._id as any).toString())
+                        balance?.notes?.includes((callIn._id as any).toString()) ||
+                        balance?.notes?.includes(`credited back from leave ${leaveRequestId}`)
                     ) {
                         results.alreadyProcessed.push(
                             (callIn._id as any).toString()
@@ -2353,7 +2369,7 @@ export class CallInController {
                     leaveType: leaveRequest.leaveType,
                     used: balance?.used || 0,
                     remaining: balance?.remaining || 0,
-                    total: (balance as any)?.total || 0,
+                    total: balance?.allocated || 0,
                 },
                 leaveRequestDetails: {
                     staff: (leaveRequest.staff as any).name,
@@ -2682,8 +2698,8 @@ export class CallInController {
             if (search) {
                 const staffIds = await Staff.find({
                     $or: [
-                        { name: { $regex: search, $options: "i" } },
-                        { staffId: { $regex: search, $options: "i" } },
+                        { name: { $regex: escapeRegex(String(search)), $options: "i" } },
+                        { staffId: { $regex: escapeRegex(String(search)), $options: "i" } },
                     ],
                 }).select("_id")
 

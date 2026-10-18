@@ -17,6 +17,7 @@ import {
     GENDER_RESTRICTED_LEAVES,
 } from "../utils/types"
 import { uploadToCloudinary, deleteFromCloudinary } from "../utils/cloudinary"
+import { escapeRegex } from "../utils/regex"
 
 export class StaffController {
     /**
@@ -621,7 +622,7 @@ export class StaffController {
 
             // Free text search
             if (search && typeof search === "string" && search.trim()) {
-                const searchTerm = search.trim()
+                const searchTerm = escapeRegex(search.trim())
                 query.$or = [
                     { name: { $regex: searchTerm, $options: "i" } },
                     { staffId: { $regex: searchTerm, $options: "i" } },
@@ -1286,18 +1287,32 @@ export class StaffController {
                 ])
             }
 
-            const searchTerm = q.trim()
-            const limitNum = Math.min(50, Math.max(1, Number(limit)))
+            const searchTerm = escapeRegex(q.trim())
+            const limitNum = Math.min(50, Math.max(1, Number(limit)) || 10)
+
+            // Contact details (and searching by phone) only for HR/Admin
+            const user = (req as any).user
+            const canSeeContacts =
+                user?.permissions?.includes("HR") ||
+                user?.permissions?.includes("ADMIN")
+
+            const searchFields: any[] = [
+                { name: { $regex: searchTerm, $options: "i" } },
+                { staffId: { $regex: searchTerm, $options: "i" } },
+            ]
+            if (canSeeContacts) {
+                searchFields.push({ phone: { $regex: searchTerm, $options: "i" } })
+            }
 
             const staff = await Staff.find({
                 status: AccountStatus.ACTIVE,
-                $or: [
-                    { name: { $regex: searchTerm, $options: "i" } },
-                    { staffId: { $regex: searchTerm, $options: "i" } },
-                    { phone: { $regex: searchTerm, $options: "i" } },
-                ],
+                $or: searchFields,
             })
-                .select("name staffId email phone department")
+                .select(
+                    canSeeContacts
+                        ? "name staffId email phone department"
+                        : "name staffId department"
+                )
                 .populate("department", "name")
                 .limit(limitNum)
                 .lean()

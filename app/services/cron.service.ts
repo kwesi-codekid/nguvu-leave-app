@@ -60,7 +60,7 @@ export class CronService {
                             leaveType: "annual",
                             periodStart: { $lte: now },
                             periodEnd: { $gte: now },
-                        })
+                        }).sort({ periodStart: -1 })
 
                         if (!leaveBalance) {
                             logger.error(
@@ -103,6 +103,20 @@ export class CronService {
     private static scheduleContractAnniversaryCheck(): void {
         // Schedule job to run daily at midnight
         cron.schedule("0 0 * * *", async () => {
+            // Contract statuses first, so balances are created for contracts
+            // that start today and not for ones that ended yesterday
+            try {
+                const activated = await StaffContract.activatePendingContracts()
+                const expired = await StaffContract.updateExpiredContracts()
+                if (activated > 0 || expired > 0) {
+                    logger.cron(
+                        `Contract status check complete. Activated: ${activated}, Expired: ${expired}`
+                    )
+                }
+            } catch (error) {
+                logger.error("[Cron] Error updating contract statuses:", error)
+            }
+
             try {
                 // Use the model's createNewPeriodBalances which:
                 // 1. Gets all active contracts

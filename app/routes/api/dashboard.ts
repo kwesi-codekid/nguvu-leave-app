@@ -2,7 +2,7 @@ import { type LoaderFunctionArgs } from "react-router"
 import { connectDB } from "~/database/connect"
 import DashboardController from "~/controllers/dashboard.controller"
 import Staff from "~/models/staff.model"
-import jwt from "jsonwebtoken"
+import { verifyAccessToken } from "~/utils/auth-token"
 import {
     successResponse,
     errorResponse,
@@ -10,8 +10,6 @@ import {
     extractToken,
 } from "~/utils/api-utils"
 import { AccountStatus } from "~/utils/types"
-
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key"
 
 // Helper to get authenticated staff from request
 async function getAuthenticatedStaff(request: Request) {
@@ -23,7 +21,7 @@ async function getAuthenticatedStaff(request: Request) {
     }
 
     try {
-        const decoded = jwt.verify(token, JWT_SECRET) as { staffId: string }
+        const decoded = verifyAccessToken(token)
         await connectDB()
 
         const staff = await Staff.findById(decoded.staffId)

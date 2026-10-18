@@ -11,6 +11,7 @@ import {
   setSessionData,
 } from "~/auth-session";
 import { Mail, Phone } from "lucide-react";
+import { internalRequestHeaders } from "~/utils/rate-limit";
 
 export default function Login() {
   const navigation = useNavigation();
@@ -94,9 +95,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // Handle phone login (send OTP)
   if (phone && !email) {
     try {
-      const response = await axios.post(`${baseUrl}/auth?op=send-otp`, {
-        phone,
-      });
+      const response = await axios.post(
+        `${baseUrl}/auth?op=send-otp`,
+        { phone },
+        { headers: internalRequestHeaders(request) },
+      );
 
       flashSession.flash("alert", {
         status: "success",
@@ -106,7 +109,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         title: "OTP sent successfully",
       });
 
-      return redirect(`/verify-otp?phone=${phone}${redirectParam}`, {
+      return redirect(`/verify-otp?phone=${encodeURIComponent(String(phone))}${redirectParam}`, {
         headers: {
           "Set-Cookie": await commitFlashSession(flashSession),
         },
@@ -138,9 +141,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // Handle email login (send OTP)
   if (email && !phone) {
     try {
-      const response = await axios.post(`${baseUrl}/auth?op=send-otp`, {
-        email,
-      });
+      const response = await axios.post(
+        `${baseUrl}/auth?op=send-otp`,
+        { email },
+        { headers: internalRequestHeaders(request) },
+      );
 
       flashSession.flash("alert", {
         status: "success",
@@ -150,7 +155,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         title: "OTP sent successfully",
       });
 
-      return redirect(`/verify-otp?email=${email}${redirectParam}`, {
+      return redirect(`/verify-otp?email=${encodeURIComponent(String(email))}${redirectParam}`, {
         headers: {
           "Set-Cookie": await commitFlashSession(flashSession),
         },
