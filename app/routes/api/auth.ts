@@ -21,9 +21,8 @@ import {
     verifyAccessToken,
     verifyRefreshToken,
 } from "~/utils/auth-token"
+import { CODE_LENGTH, CODE_PATTERN } from "~/utils/code-format"
 import {
-    CODE_LENGTH,
-    CODE_PATTERN,
     generateCode,
     verifyStaffCode,
     storeStaffCode,
