@@ -17,8 +17,8 @@ import {
  * and global send limits are in-memory (see utils/rate-limit.ts).
  */
 
-export const CODE_LENGTH = 6
-export const CODE_PATTERN = /^\d{6}$/
+import { CODE_LENGTH, CODE_PATTERN } from "./code-format"
+export { CODE_LENGTH, CODE_PATTERN }
 export const MAX_CODE_ATTEMPTS = 5
 export const CODE_RESEND_COOLDOWN_MS = 30 * 1000
 export const MAX_SENDS_PER_HOUR_PER_IP = 5 // per account + client IP
