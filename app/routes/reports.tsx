@@ -735,13 +735,10 @@ export default function Reports() {
                         ) : balancesReport?.data?.statistics ? (
                             (() => {
                                 const annualStats = balancesReport.data.statistics.byLeaveType?.annual
-                                const totalAllocated = annualStats?.totalAllocated || balancesReport.data.statistics.totals.totalAllocated || 0
-                                const totalUsed = annualStats?.totalUsed || balancesReport.data.statistics.totals.totalUsed || 0
-                                const totalRemaining = annualStats?.totalRemaining || balancesReport.data.statistics.totals.totalRemaining || 0
                                 const utilizationPercent = annualStats?.avgUtilization || balancesReport.data.statistics.averages.utilizationPercent || 0
 
                                 // Prepare per-staff data for chart (filter to annual only)
-                                const perStaffData = (balancesReport.data.perStaffPerType || [])
+                                const perStaffDataRaw = (balancesReport.data.perStaffPerType || [])
                                     .filter((r: any) => r.leaveType === "annual")
                                     // Rows the API could not calculate (no contract, no balance)
                                     // sort last, but are still listed so nobody vanishes silently.
@@ -751,30 +748,37 @@ export default function Reports() {
                                         return (b.takenInYear || 0) - (a.takenInYear || 0)
                                     })
 
+                                // Totals come from the rows on screen, so the
+                                // cards and the table can never disagree.
+                                const countedStaff = perStaffDataRaw.filter((r: any) => !r.status)
+                                const totalBalance = countedStaff.reduce((sum: number, r: any) => sum + (r.availableNow || 0), 0)
+                                const totalTaken = perStaffDataRaw.reduce((sum: number, r: any) => sum + (r.takenInYear || 0), 0)
+                                const perStaffData = perStaffDataRaw
+
                                 return (
                                     <div className="space-y-6">
                                         {/* KPI Cards */}
                                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                             <KPICard
-                                                title="Total Allocated"
-                                                value={totalAllocated}
-                                                subtitle="annual leave days"
-                                                icon={Calendar}
-                                                color="primary"
+                                                title="Total Balance"
+                                                value={totalBalance}
+                                                subtitle="days staff can still book"
+                                                icon={PieChart}
+                                                color="success"
                                             />
                                             <KPICard
-                                                title="Total Used"
-                                                value={totalUsed}
-                                                subtitle="days consumed"
+                                                title={`Taken in ${filters.year}`}
+                                                value={totalTaken}
+                                                subtitle="days already taken"
                                                 icon={TrendingUp}
                                                 color="warning"
                                             />
                                             <KPICard
-                                                title="Remaining"
-                                                value={totalRemaining}
-                                                subtitle="days available"
-                                                icon={PieChart}
-                                                color="success"
+                                                title="Staff Listed"
+                                                value={perStaffData.length}
+                                                subtitle={countedStaff.length === perStaffData.length ? "all with a balance" : `${perStaffData.length - countedStaff.length} without a balance`}
+                                                icon={Users}
+                                                color="primary"
                                             />
                                             <KPICard
                                                 title="Utilization"
@@ -851,7 +855,7 @@ export default function Reports() {
                                                 <CardHeader className="pb-0">
                                                     <div className="flex items-center gap-2">
                                                         <BarChart3 className="size-5 text-primary" />
-                                                        <h3 className="font-semibold">Available vs Taken per Staff</h3>
+                                                        <h3 className="font-semibold">Balance vs Taken per Staff</h3>
                                                     </div>
                                                 </CardHeader>
                                                 <CardBody>
@@ -873,7 +877,7 @@ export default function Reports() {
                                                                 <YAxis tick={{ fontSize: 12 }} stroke="#9CA3AF" />
                                                                 <RechartsTooltip content={<CustomTooltip />} />
                                                                 <Legend verticalAlign="top" height={36} />
-                                                                <Bar dataKey="available" name="Available now" fill="#22C55E" radius={[4, 4, 0, 0]} />
+                                                                <Bar dataKey="available" name="Balance" fill="#22C55E" radius={[4, 4, 0, 0]} />
                                                                 <Bar dataKey="taken" name={`Taken in ${filters.year}`} fill="#3B82F6" radius={[4, 4, 0, 0]} />
                                                             </BarChart>
                                                         </ResponsiveContainer>
@@ -947,10 +951,7 @@ export default function Reports() {
                                                         <TableHeader>
                                                             <TableColumn>Staff</TableColumn>
                                                             <TableColumn>Department</TableColumn>
-                                                            <TableColumn>Entitlement</TableColumn>
-                                                            <TableColumn>Carried over</TableColumn>
-                                                            <TableColumn>Used this period</TableColumn>
-                                                            <TableColumn>Available now</TableColumn>
+                                                            <TableColumn>Balance</TableColumn>
                                                             <TableColumn>{`Taken in ${filters.year}`}</TableColumn>
                                                             <TableColumn>Leave period</TableColumn>
                                                         </TableHeader>
@@ -982,25 +983,16 @@ export default function Reports() {
                                                                         <span className="text-sm">{record.staff?.department || "—"}</span>
                                                                     </TableCell>
                                                                     {record.status ? (
-                                                                        <TableCell colSpan={5}>
+                                                                        <TableCell colSpan={3}>
                                                                             <span className="text-sm italic text-zinc-500">{record.status}</span>
                                                                         </TableCell>
                                                                     ) : (
                                                                         <>
                                                                             <TableCell>
-                                                                                <span className="text-sm font-medium">{record.entitlement}</span>
-                                                                            </TableCell>
-                                                                            <TableCell>
-                                                                                <span className="text-sm font-medium text-blue-600 dark:text-blue-400">{record.carriedOver || 0}</span>
-                                                                            </TableCell>
-                                                                            <TableCell>
-                                                                                <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{record.used}</span>
-                                                                            </TableCell>
-                                                                            <TableCell>
                                                                                 <span className="text-sm font-semibold text-green-600 dark:text-green-400">{record.availableNow}</span>
                                                                             </TableCell>
                                                                             <TableCell>
-                                                                                <span className="text-sm font-medium">{record.takenInYear ?? 0}</span>
+                                                                                <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{record.takenInYear ?? 0}</span>
                                                                             </TableCell>
                                                                             <TableCell>
                                                                                 <span className="text-xs text-zinc-500 whitespace-nowrap">{record.periodLabel || "—"}</span>
