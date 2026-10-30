@@ -5,5 +5,5 @@
  * modules can use these at module level, e.g. in zod schemas, without pulling
  * server-only code into the browser bundle.
  */
-export const CODE_LENGTH = 6
-export const CODE_PATTERN = /^\d{6}$/
+export const CODE_LENGTH = 4;
+export const CODE_PATTERN = /^\d{4}$/;

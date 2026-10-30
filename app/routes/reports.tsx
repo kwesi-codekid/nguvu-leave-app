@@ -982,23 +982,28 @@ export default function Reports() {
                                                                     <TableCell>
                                                                         <span className="text-sm">{record.staff?.department || "—"}</span>
                                                                     </TableCell>
-                                                                    {record.status ? (
-                                                                        <TableCell colSpan={3}>
-                                                                            <span className="text-sm italic text-zinc-500">{record.status}</span>
-                                                                        </TableCell>
-                                                                    ) : (
-                                                                        <>
-                                                                            <TableCell>
-                                                                                <span className="text-sm font-semibold text-green-600 dark:text-green-400">{record.availableNow}</span>
-                                                                            </TableCell>
-                                                                            <TableCell>
-                                                                                <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{record.takenInYear ?? 0}</span>
-                                                                            </TableCell>
-                                                                            <TableCell>
-                                                                                <span className="text-xs text-zinc-500 whitespace-nowrap">{record.periodLabel || "—"}</span>
-                                                                            </TableCell>
-                                                                        </>
-                                                                    )}
+                                                                    {/* Every row must yield exactly one cell per column:
+                                                                        React Aria counts Row children with
+                                                                        React.Children.forEach, which does not flatten
+                                                                        fragments, so branch inside the cells, never
+                                                                        around them. */}
+                                                                    <TableCell>
+                                                                        {record.status ? (
+                                                                            <span className="text-sm text-zinc-400">—</span>
+                                                                        ) : (
+                                                                            <span className="text-sm font-semibold text-green-600 dark:text-green-400">{record.availableNow}</span>
+                                                                        )}
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{record.takenInYear ?? 0}</span>
+                                                                    </TableCell>
+                                                                    <TableCell>
+                                                                        {record.status ? (
+                                                                            <span className="text-sm italic text-zinc-500 whitespace-nowrap">{record.status}</span>
+                                                                        ) : (
+                                                                            <span className="text-xs text-zinc-500 whitespace-nowrap">{record.periodLabel || "—"}</span>
+                                                                        )}
+                                                                    </TableCell>
                                                                 </TableRow>
                                                             ))}
                                                         </TableBody>
