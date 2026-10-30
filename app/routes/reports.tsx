@@ -19,6 +19,7 @@ import {
     TableBody,
     TableRow,
     TableCell,
+    Tooltip,
 } from "@heroui/react"
 import { useState } from "react"
 import axios from "axios"
@@ -45,6 +46,7 @@ import {
     RefreshCw,
     Filter,
     ChevronDown,
+    Info,
 } from "lucide-react"
 import {
     PieChart as RechartsPieChart,
@@ -741,13 +743,13 @@ export default function Reports() {
                                 // Prepare per-staff data for chart (filter to annual only)
                                 const perStaffData = (balancesReport.data.perStaffPerType || [])
                                     .filter((r: any) => r.leaveType === "annual")
-                                    .map((r: any) => ({
-                                        ...r,
-                                        // accrued already includes carry-over/adjustment from the API
-                                        computedRemaining: (r.accrued || 0) - (r.used || 0),
-                                        computedAvailable: r.availableForRequest ?? ((r.total || 0) - (r.used || 0)),
-                                    }))
-                                    .sort((a: any, b: any) => b.used - a.used)
+                                    // Rows the API could not calculate (no contract, no balance)
+                                    // sort last, but are still listed so nobody vanishes silently.
+                                    .sort((a: any, b: any) => {
+                                        if (a.status && !b.status) return 1
+                                        if (!a.status && b.status) return -1
+                                        return (b.takenInYear || 0) - (a.takenInYear || 0)
+                                    })
 
                                 return (
                                     <div className="space-y-6">
@@ -849,18 +851,21 @@ export default function Reports() {
                                                 <CardHeader className="pb-0">
                                                     <div className="flex items-center gap-2">
                                                         <BarChart3 className="size-5 text-primary" />
-                                                        <h3 className="font-semibold">Remaining & Available per Staff</h3>
+                                                        <h3 className="font-semibold">Available vs Taken per Staff</h3>
                                                     </div>
                                                 </CardHeader>
                                                 <CardBody>
                                                     <div className="h-[320px]">
                                                         <ResponsiveContainer width="100%" height="100%">
                                                             <BarChart
-                                                                data={perStaffData.slice(0, 15).map((r: any) => ({
-                                                                    name: r.staff?.name?.split(" ").slice(0, 2).join(" ") || "—",
-                                                                    remaining: r.computedRemaining,
-                                                                    available: r.computedAvailable,
-                                                                }))}
+                                                                data={perStaffData
+                                                                    .filter((r: any) => !r.status)
+                                                                    .slice(0, 15)
+                                                                    .map((r: any) => ({
+                                                                        name: r.staff?.name?.split(" ").slice(0, 2).join(" ") || "—",
+                                                                        available: r.availableNow,
+                                                                        taken: r.takenInYear,
+                                                                    }))}
                                                                 margin={{ top: 20, right: 30, left: 0, bottom: 60 }}
                                                             >
                                                                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" opacity={0.3} />
@@ -868,8 +873,8 @@ export default function Reports() {
                                                                 <YAxis tick={{ fontSize: 12 }} stroke="#9CA3AF" />
                                                                 <RechartsTooltip content={<CustomTooltip />} />
                                                                 <Legend verticalAlign="top" height={36} />
-                                                                <Bar dataKey="remaining" name="Remaining (Accrued − Used)" fill="#22C55E" radius={[4, 4, 0, 0]} />
-                                                                <Bar dataKey="available" name="Available (Allocated − Used)" fill="#3B82F6" radius={[4, 4, 0, 0]} />
+                                                                <Bar dataKey="available" name="Available now" fill="#22C55E" radius={[4, 4, 0, 0]} />
+                                                                <Bar dataKey="taken" name={`Taken in ${filters.year}`} fill="#3B82F6" radius={[4, 4, 0, 0]} />
                                                             </BarChart>
                                                         </ResponsiveContainer>
                                                     </div>
@@ -942,52 +947,66 @@ export default function Reports() {
                                                         <TableHeader>
                                                             <TableColumn>Staff</TableColumn>
                                                             <TableColumn>Department</TableColumn>
-                                                            <TableColumn>Allocated</TableColumn>
-                                                            <TableColumn>Accrued</TableColumn>
-                                                            <TableColumn>Used</TableColumn>
-                                                            <TableColumn>Remaining</TableColumn>
-                                                            <TableColumn>Available</TableColumn>
-                                                            <TableColumn>Utilization</TableColumn>
+                                                            <TableColumn>Entitlement</TableColumn>
+                                                            <TableColumn>Carried over</TableColumn>
+                                                            <TableColumn>Used this period</TableColumn>
+                                                            <TableColumn>Available now</TableColumn>
+                                                            <TableColumn>{`Taken in ${filters.year}`}</TableColumn>
+                                                            <TableColumn>Leave period</TableColumn>
                                                         </TableHeader>
                                                         <TableBody>
                                                             {perStaffData.map((record: any, i: number) => (
                                                                 <TableRow key={record.staff?.id || i}>
                                                                     <TableCell>
-                                                                        <div className="flex flex-col">
-                                                                            <span className="font-medium text-sm">{record.staff?.name}</span>
-                                                                            <span className="text-xs text-zinc-500">{record.staff?.staffId}</span>
+                                                                        <div className="flex items-center gap-1.5">
+                                                                            <div className="flex flex-col">
+                                                                                <span className="font-medium text-sm">{record.staff?.name}</span>
+                                                                                <span className="text-xs text-zinc-500">{record.staff?.staffId}</span>
+                                                                            </div>
+                                                                            {record.notes?.length > 0 && (
+                                                                                <Tooltip
+                                                                                    content={
+                                                                                        <ul className="max-w-xs list-disc pl-4 py-1 space-y-1 text-xs">
+                                                                                            {record.notes.map((n: string, k: number) => (
+                                                                                                <li key={k}>{n}</li>
+                                                                                            ))}
+                                                                                        </ul>
+                                                                                    }
+                                                                                >
+                                                                                    <Info className="size-3.5 shrink-0 text-zinc-400 hover:text-primary cursor-help" />
+                                                                                </Tooltip>
+                                                                            )}
                                                                         </div>
                                                                     </TableCell>
                                                                     <TableCell>
                                                                         <span className="text-sm">{record.staff?.department || "—"}</span>
                                                                     </TableCell>
-                                                                    <TableCell>
-                                                                        <span className="text-sm font-medium">{record.total}</span>
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <span className="text-sm font-medium text-blue-600 dark:text-blue-400">{record.accrued || 0}</span>
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{record.used}</span>
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <span className="text-sm font-medium text-green-600 dark:text-green-400">{record.computedRemaining}</span>
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <span className="text-sm font-medium">{record.computedAvailable}</span>
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <div className="flex items-center gap-2">
-                                                                            <Progress
-                                                                                value={record.utilizationPercent || 0}
-                                                                                size="sm"
-                                                                                className="max-w-[80px]"
-                                                                                color={record.utilizationPercent > 80 ? "danger" : record.utilizationPercent > 50 ? "warning" : "primary"}
-                                                                                classNames={{ track: "bg-zinc-200 dark:bg-zinc-700" }}
-                                                                            />
-                                                                            <span className="text-xs font-medium whitespace-nowrap">{record.utilizationPercent}%</span>
-                                                                        </div>
-                                                                    </TableCell>
+                                                                    {record.status ? (
+                                                                        <TableCell colSpan={5}>
+                                                                            <span className="text-sm italic text-zinc-500">{record.status}</span>
+                                                                        </TableCell>
+                                                                    ) : (
+                                                                        <>
+                                                                            <TableCell>
+                                                                                <span className="text-sm font-medium">{record.entitlement}</span>
+                                                                            </TableCell>
+                                                                            <TableCell>
+                                                                                <span className="text-sm font-medium text-blue-600 dark:text-blue-400">{record.carriedOver || 0}</span>
+                                                                            </TableCell>
+                                                                            <TableCell>
+                                                                                <span className="text-sm font-medium text-amber-600 dark:text-amber-400">{record.used}</span>
+                                                                            </TableCell>
+                                                                            <TableCell>
+                                                                                <span className="text-sm font-semibold text-green-600 dark:text-green-400">{record.availableNow}</span>
+                                                                            </TableCell>
+                                                                            <TableCell>
+                                                                                <span className="text-sm font-medium">{record.takenInYear ?? 0}</span>
+                                                                            </TableCell>
+                                                                            <TableCell>
+                                                                                <span className="text-xs text-zinc-500 whitespace-nowrap">{record.periodLabel || "—"}</span>
+                                                                            </TableCell>
+                                                                        </>
+                                                                    )}
                                                                 </TableRow>
                                                             ))}
                                                         </TableBody>

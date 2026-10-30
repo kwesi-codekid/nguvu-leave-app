@@ -200,7 +200,17 @@ export class LeaveBalanceController {
                         },
                     ])
                 }
-                query.year = queryYear
+                // `year` is derived from periodStart, so filtering on it alone
+                // drops anyone whose leave year opened in the previous calendar
+                // year (e.g. a May-to-April period is year=2025 but is the
+                // period someone is actually in for most of 2026). Match any
+                // period that overlaps the requested year instead.
+                query.periodStart = {
+                    $lte: new Date(`${queryYear}-12-31T23:59:59.999Z`),
+                }
+                query.periodEnd = {
+                    $gte: new Date(`${queryYear}-01-01T00:00:00.000Z`),
+                }
             } else {
                 // Default: find balance for current period
                 const period = await this.getStaffCurrentPeriod(staffId)

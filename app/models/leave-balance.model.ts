@@ -377,6 +377,23 @@ LeaveBalanceSchema.statics.getOrCreate = async function (
             ? totalPeriodMonths * 2.5
             : (LEAVE_CAPS[leaveType] || 0)
 
+        // Refuse to open a period that overlaps one this staff member already
+        // has for the same leave type. A unique index cannot express "these
+        // date ranges must not overlap", so the check has to live here.
+        // Overlapping periods are what made the same person appear twice on
+        // reports and made "current balance" ambiguous.
+        const overlapping = await this.findOne({
+            staff: staffId,
+            leaveType,
+            periodStart: { $lte: new Date(periodEnd) },
+            periodEnd: { $gte: normalizedStart },
+        })
+        if (overlapping) {
+            throw new Error(
+                `Cannot create a ${leaveType} balance for ${formatPeriod(normalizedStart, new Date(periodEnd))}: it overlaps the existing period ${formatPeriod(overlapping.periodStart, overlapping.periodEnd)}`
+            )
+        }
+
         // Unused entitlement carries into the new period as an adjustment.
         // Only set on creation, so re-running this never double-credits.
         const carried = await (this as any).getCarryForward(
