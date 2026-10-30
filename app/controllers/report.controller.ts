@@ -5,6 +5,7 @@ import LeaveBalance, { calcRemaining } from "../models/leave-balance.model"
 import Staff from "../models/staff.model"
 import Department from "../models/department.model"
 import StaffContract from "../models/staff-contract.model"
+import { formatPeriod } from "../utils/contract-period"
 import CallIn from "../models/call-in.model"
 import AuditLogController from "./audit-log.controller"
 import {
@@ -19,6 +20,7 @@ import {
     LeaveStatus,
     ContractStatus,
     Gender,
+    LEAVE_CAPS,
 } from "../utils/types"
 
 export class ReportController {
@@ -456,6 +458,30 @@ export class ReportController {
             const staffUtilization: any = {}
             const threshold = Number(lowBalanceThreshold)
 
+            // The date the report speaks as of: today for the current year,
+            // otherwise the last day of the year being reported on.
+            const refDate = new Date(Math.min(Date.now(), yearEnd.getTime()))
+
+            // Days actually taken during the calendar year, counted from the
+            // approved requests themselves rather than by adding up balance
+            // rows. Each request stores its own per-year split, so leave that
+            // straddles New Year is attributed to the right year.
+            const takenByStaff: Record<string, number> = {}
+            const approvedInYear = await LeaveRequest.find({
+                status: LeaveStatus.APPROVED,
+                leaveType: effectiveLeaveType,
+                startDate: { $lte: yearEnd },
+                endDate: { $gte: yearStart },
+            })
+                .select("staff workingDays workingDaysBreakdown")
+                .lean()
+            for (const req of approvedInYear) {
+                const key = String(req.staff)
+                const breakdown = (req.workingDaysBreakdown || {}) as Record<string, number>
+                const days = breakdown[String(yearNum)] ?? 0
+                if (days) takenByStaff[key] = (takenByStaff[key] || 0) + days
+            }
+
             for (const balance of balances) {
                 const staff = balance.staff as any
                 const staffKey = staff._id.toString()
@@ -473,12 +499,35 @@ export class ReportController {
                     }
                 }
 
-                // Compute virtuals manually since .lean() strips them
+                // Compute virtuals manually since .lean() strips them.
+                // Each figure is reported under its own name so the report can
+                // never present one number under another's heading:
+                //   entitlement  - this period's allocation (pro-rated by period length)
+                //   earnedToDate - accrued so far, on its own
+                //   carriedOver  - adjustments, on its own
+                //   availableNow - what the staff member may actually book today
+                const entitlement = balance.allocated || 0
+                const earnedToDate = balance.accrued || 0
+                const carriedOver = balance.adjustments || 0
                 const base = balance.leaveType === LeaveTypes.ANNUAL
-                    ? (balance.accrued || 0)
-                    : balance.allocated
-                const remaining = base + (balance.adjustments || 0) - balance.used
-                const availableForRequest = Math.max(0, Math.max(balance.allocated, balance.accrued || 0) + (balance.adjustments || 0) - balance.used)
+                    ? earnedToDate
+                    : entitlement
+                const remaining = base + carriedOver - balance.used
+                const availableForRequest = Math.max(0, Math.max(entitlement, earnedToDate) + carriedOver - balance.used)
+                const takenInYear = takenByStaff[staffKey] || 0
+
+                const notes = this.buildBalanceNotes({
+                    leaveType: balance.leaveType,
+                    entitlement,
+                    earnedToDate,
+                    carriedOver,
+                    used: balance.used,
+                    remaining,
+                    takenInYear,
+                    periodStart: balance.periodStart,
+                    periodEnd: balance.periodEnd,
+                    asOf: refDate,
+                })
 
                 // Add to per staff per type
                 const record = {
@@ -489,21 +538,28 @@ export class ReportController {
                         department: staff.department?.name,
                     },
                     leaveType: balance.leaveType,
-                    total: balance.allocated,
-                    // Accrued reported to the UI includes carried-over/adjusted days
-                    // so it flows correctly into the remaining/available columns.
-                    accrued: (balance.accrued || 0) + (balance.adjustments || 0),
-                    adjustment: balance.adjustments,
+                    entitlement,
+                    earnedToDate,
+                    carriedOver,
                     used: balance.used,
+                    availableNow: availableForRequest,
+                    takenInYear,
+                    periodStart: balance.periodStart,
+                    periodEnd: balance.periodEnd,
+                    periodLabel: formatPeriod(balance.periodStart, balance.periodEnd),
+                    notes,
+                    status: "",
+                    // Legacy aliases kept so existing consumers keep working.
+                    total: entitlement,
+                    accrued: earnedToDate + carriedOver,
+                    adjustment: carriedOver,
                     remaining,
                     availableForRequest,
                     utilizationPercent:
-                        balance.allocated > 0
-                            ? Math.round(
-                                  (balance.used / balance.allocated) * 100
-                              )
+                        entitlement > 0
+                            ? Math.round((balance.used / entitlement) * 100)
                             : 0,
-                    isLowBalance: remaining <= threshold,
+                    isLowBalance: availableForRequest <= threshold,
                     lastUpdated: balance.updatedAt,
                 }
 
@@ -542,6 +598,63 @@ export class ReportController {
                 stats.totals.totalUsed += balance.used
                 stats.totals.totalRemaining += remaining
                 stats.totals.totalAvailableForRequest += availableForRequest
+            }
+
+            // Active staff with no balance row for this period would otherwise
+            // drop off the report silently, which is worse than showing a gap:
+            // nobody can tell the difference between "not listed" and "nothing
+            // to report". List them with the reason instead.
+            if (!staffId) {
+                const listed = new Set(perStaffPerType.map((r) => String(r.staff.id)))
+                const staffQuery: any = { status: "active" }
+                if (departmentId) staffQuery.department = departmentId
+                const allActive = await Staff.find(staffQuery)
+                    .select("name staffId department")
+                    .populate({ path: "department", select: "name" })
+                    .lean()
+
+                for (const person of allActive) {
+                    const key = String(person._id)
+                    if (listed.has(key)) continue
+
+                    const hasContract = await StaffContract.exists({
+                        staff: person._id,
+                        status: ContractStatus.ACTIVE,
+                    })
+
+                    perStaffPerType.push({
+                        staff: {
+                            id: person._id,
+                            name: person.name,
+                            staffId: person.staffId,
+                            department: (person.department as any)?.name,
+                        },
+                        leaveType: effectiveLeaveType,
+                        entitlement: null,
+                        earnedToDate: null,
+                        carriedOver: null,
+                        used: null,
+                        availableNow: null,
+                        takenInYear: takenByStaff[key] || 0,
+                        periodStart: null,
+                        periodEnd: null,
+                        periodLabel: null,
+                        notes: [
+                            hasContract
+                                ? "No leave balance has been set up for the current leave period, so no figures can be shown."
+                                : "No active contract, so no leave entitlement is calculated.",
+                        ],
+                        status: hasContract ? "NO BALANCE FOR CURRENT PERIOD" : "NO ACTIVE CONTRACT",
+                        total: null,
+                        accrued: null,
+                        adjustment: null,
+                        remaining: null,
+                        availableForRequest: null,
+                        utilizationPercent: 0,
+                        isLowBalance: false,
+                        lastUpdated: null,
+                    })
+                }
             }
 
             // Calculate averages and utilization
@@ -1822,6 +1935,89 @@ export class ReportController {
     }
 
     /**
+     * Plain-language notes explaining any figure on a row that would otherwise
+     * look wrong to someone reading the report.
+     *
+     * Deliberately quiet: a note that fires on most rows stops being read, so
+     * routine carry-over and ordinary adjustments get no note - the Carried
+     * over column already shows them. Only genuinely surprising rows are
+     * annotated.
+     */
+    private static buildBalanceNotes(b: {
+        leaveType: string
+        entitlement: number
+        earnedToDate: number
+        carriedOver: number
+        used: number
+        remaining: number
+        takenInYear: number
+        periodStart: Date
+        periodEnd: Date
+        asOf: Date
+    }): string[] {
+        const notes: string[] = []
+        const cap = LEAVE_CAPS[b.leaveType as LeaveTypes] ?? 0
+        const start = new Date(b.periodStart)
+        const end = new Date(b.periodEnd)
+        const label = formatPeriod(b.periodStart, b.periodEnd)
+
+        // A period that opened recently shows a low earned figure. Without
+        // this the balance looks as though days have gone missing.
+        const daysSinceStart = Math.floor((b.asOf.getTime() - start.getTime()) / 86400000)
+        if (daysSinceStart >= 0 && daysSinceStart <= 60) {
+            notes.push(
+                `This leave year began ${start.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}, so earned days have only just started building up again.`
+            )
+        }
+
+        // Entitlement pro-rated because the period is shorter than a year.
+        if (b.leaveType === LeaveTypes.ANNUAL && cap > 0 && b.entitlement !== cap) {
+            const months = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000 / 30.44))
+            notes.push(
+                `Entitlement is ${b.entitlement} days, not the usual ${cap}, because this leave period runs ${months} months (${label}) rather than a full year.`
+            )
+        }
+
+        // Days taken in the calendar year sit in a different window from the
+        // days charged to this period. Explain rather than hide the gap.
+        if (b.takenInYear !== b.used) {
+            const diff = b.takenInYear - b.used
+            if (diff > 0) {
+                notes.push(
+                    `${b.takenInYear} days were taken during the year, but only ${b.used} fall inside this leave period; the other ${diff} belong to the previous one.`
+                )
+            } else {
+                notes.push(
+                    `${b.used} days are charged to this leave period, of which ${Math.abs(diff)} fall in the next calendar year.`
+                )
+            }
+        }
+
+        // Carried days outweigh what this period itself grants.
+        if (b.carriedOver > b.entitlement) {
+            notes.push(
+                `Most of this balance is carried over from earlier years (${b.carriedOver} carried against ${b.entitlement} granted for this period).`
+            )
+        }
+
+        // Legacy records hold entitlement earned before the system existed.
+        if (b.leaveType === LeaveTypes.ANNUAL && cap > 0 && b.earnedToDate > cap) {
+            notes.push(
+                `Includes leave carried over from before the system was introduced, which is why earned days (${b.earnedToDate}) exceed the ${cap}-day entitlement.`
+            )
+        }
+
+        // Leave taken ahead of accrual.
+        if (b.remaining < 0) {
+            notes.push(
+                `Leave has been taken ahead of what is earned so far; the balance recovers by ${Math.abs(b.remaining)} days as the rest of the period accrues.`
+            )
+        }
+
+        return notes
+    }
+
+    /**
      * Keep one balance per staff and leave type: the latest period that had
      * started by the reference date (today, or year end for past years).
      * A calendar year can overlap two contract-anniversary periods, so without
@@ -1855,24 +2051,33 @@ export class ReportController {
             "Staff Name",
             "Department",
             "Leave Type",
-            "Accrued",
-            "Used",
-            "Remaining",
+            "Balance",
+            "Taken in year",
+            "Leave period",
+            "Notes",
         ]
+
+        // Quote every field: names, period labels and notes all contain commas.
+        const cell = (v: any) => {
+            if (v === null || v === undefined) return '""'
+            return '"' + String(v).replace(/"/g, '""') + '"'
+        }
 
         const rows = balances.map((b) => [
             b.staff.staffId,
             b.staff.name,
             b.staff.department || "",
             b.leaveType,
-            b.accrued || 0,
-            b.used,
-            b.remaining,
+            b.availableNow ?? "",
+            b.takenInYear ?? 0,
+            b.periodLabel ?? (b.status || ""),
+            [b.status, ...(b.notes || [])].filter(Boolean).join(" "),
         ])
 
-        return [headers.join(","), ...rows.map((row) => row.join(","))].join(
-            "\n"
-        )
+        return [
+            headers.map(cell).join(","),
+            ...rows.map((row) => row.map(cell).join(",")),
+        ].join("\n")
     }
 }
 
